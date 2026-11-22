@@ -19,7 +19,8 @@
 ## Preview
 
 <p align="center">
-  <img width="1706" height="1008" alt="SelfBot Studio Web UI" src="https://github.com/user-attachments/assets/91e795b5-03d5-43ef-9bfe-391743346321" />
+  <img width="1712" height="1005" alt="123 (2)" src="https://github.com/user-attachments/assets/c620a11a-d705-42db-ba92-b59ad7bd6b50" />
+
 </p>
 
 ---

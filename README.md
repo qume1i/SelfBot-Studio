@@ -15,6 +15,7 @@ Quick Start
 3. run selfbot.py
 4. paste your discord token, add whitelisted channels, use with peace 
 
+<img width="1706" height="1008" alt="123" src="https://github.com/user-attachments/assets/91e795b5-03d5-43ef-9bfe-391743346321" />
 
 
 

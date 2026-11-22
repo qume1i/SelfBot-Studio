@@ -51,11 +51,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # СИСТЕМНЫЕ ПРОМПТЫ И ГОТОВЫЕ ПРЕСЕТЫ ХАРАКТЕРОВ
 # ==============================================================================
 DM_SYSTEM_PROMPT = (
-    "Ты — личный помощник Шрекучки в личных сообщениях Discord. "
+    "Ты — личный помощник в личных сообщениях Discord. "
     "ВСЕГДА отвечай строго на русском языке, коротко (1-3 фразы), вежливо, живо и по делу. "
-    "Ты помогаешь Шрекучке разбирать личку: если человек пишет с вопросом или просьбой — "
-    "подскажи, помоги или скажи, что передашь Шрекучке; если просто болтает — "
-    "поддержи лёгкий, дружелюбный и чуть ироничный разговор от лица преданного помощника Шрекучки. "
+    "Ты помогаешь разбирать личку: если человек пишет с вопросом или просьбой — "
+    "подскажи, помоги или скажи, что передашь владельцу; если просто болтает — "
+    "поддержи лёгкий, дружелюбный и чуть ироничный разговор от лица преданного помощника. "
     "Никогда не говори, что ты ИИ, нейросеть, языковая модель или бот. "
     "Не используй ролевые действия в звёздочках вроде *кланяется* и не оборачивай фразы в лишние кавычки."
 )
@@ -73,7 +73,7 @@ SERVER_SYSTEM_PROMPT = (
 BUILTIN_PRESETS: List[Dict[str, str]] = [
     {
         "id": "dm_shrek",
-        "name": "Помощник Шрекучки (ЛС)",
+        "name": "Помощник (ЛС)",
         "tag": "ЛС",
         "prompt": DM_SYSTEM_PROMPT,
     },
@@ -134,6 +134,7 @@ DEFAULT_UI_THEME: Dict[str, Any] = {
     "ambient_glow": True,
     "custom_css": "",
     "language": "ru",
+    "ask_language_on_start": True,
 }
 
 
@@ -6524,6 +6525,8 @@ class BotManager:
             if "language" in patch:
                 lang_val = str(patch["language"]).strip().lower()
                 t["language"] = "en" if lang_val == "en" else "ru"
+            if "ask_language_on_start" in patch:
+                t["ask_language_on_start"] = bool(patch["ask_language_on_start"])
             if "custom_css" in patch:
                 raw_css = str(patch["custom_css"])[:12000]
                 raw_css = re.sub(r"</\s*style", "", raw_css, flags=re.IGNORECASE)
@@ -8860,6 +8863,67 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   .cmdk-hints { display: flex; gap: 12px; align-items: center; }
   .cmdk-hints span { display: inline-flex; align-items: center; gap: 4px; }
 
+  /* ==================== FLAGS & STARTUP LANGUAGE PICKER ==================== */
+  .flag-ico {
+    width: 18px; height: 12px; border-radius: 3px; flex-shrink: 0;
+    display: inline-block; vertical-align: middle;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.22), 0 2px 6px rgba(0,0,0,0.35);
+    overflow: hidden;
+  }
+  .flag-ico-lg {
+    width: 34px; height: 23px; border-radius: 5px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.24), 0 6px 16px rgba(0,0,0,0.45);
+  }
+  .lang-pill-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .lang-modal-box {
+    width: 100%; max-width: 460px;
+    background: color-mix(in srgb, var(--card) 94%, var(--bg));
+    border: 1px solid var(--border-strong); border-radius: 18px;
+    padding: 24px 22px 20px;
+    box-shadow: 0 32px 80px -16px rgba(0,0,0,0.88), 0 0 0 1px rgba(255,255,255,0.06) inset;
+    transform: scale(0.95) translateY(8px);
+    transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .modal-backdrop.open .lang-modal-box { transform: scale(1) translateY(0); }
+  .lang-modal-head { text-align: center; margin-bottom: 18px; }
+  .lang-modal-badge {
+    width: 44px; height: 44px; border-radius: 13px; margin: 0 auto 12px;
+    background: linear-gradient(135deg, var(--accent), var(--pink));
+    box-shadow: 0 10px 24px -6px color-mix(in srgb, var(--accent) 60%, transparent);
+    display: grid; place-items: center; color: #fff;
+  }
+  .lang-modal-badge svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .lang-modal-title { font-size: 16.5px; font-weight: 800; letter-spacing: -0.3px; color: var(--text); }
+  .lang-modal-sub { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
+  .lang-pick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; margin-bottom: 16px; }
+  .lang-pick-card {
+    display: flex; align-items: center; gap: 12px; text-align: left;
+    padding: 14px 14px; border-radius: 13px; cursor: pointer;
+    background: var(--input); border: 1.5px solid var(--border-strong); color: var(--text);
+    transition: all 0.16s ease;
+  }
+  .lang-pick-card:hover {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, var(--input));
+    transform: translateY(-2px);
+    box-shadow: 0 10px 24px -10px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  .lang-pick-card.current {
+    border-color: var(--accent);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, var(--input)), var(--input));
+  }
+  .lang-pick-name { font-size: 14px; font-weight: 700; display: block; line-height: 1.2; }
+  .lang-pick-sub { font-size: 11px; color: var(--muted); display: block; margin-top: 3px; }
+  .lang-modal-foot {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding-top: 12px; border-top: 1px solid var(--border);
+    font-size: 11.6px; color: var(--muted);
+  }
+  .lang-modal-foot label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  @media (max-width: 520px) { .lang-pick-grid { grid-template-columns: 1fr; } }
+
   /* ==================== CUSTOM CONFIRM DIALOG ==================== */
   .confirm-box {
     width: 100%; max-width: 420px;
@@ -9159,7 +9223,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
           <div class="card" style="cursor:pointer" onclick="openTab('personas')">
             <div class="kpi-label">Активные роли</div>
             <div style="margin-top:8px;display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600">
-              <div><span class="badge badge-dm">ЛС</span> <span id="kpi-role-dm">Помощник Шрекучки</span></div>
+              <div><span class="badge badge-dm">ЛС</span> <span id="kpi-role-dm">Помощник</span></div>
               <div><span class="badge badge-srv">SRV</span> <span id="kpi-role-srv">Каваи-девочка</span></div>
             </div>
           </div>
@@ -9767,14 +9831,17 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
       <!-- ==================== 7. НАСТРОЙКИ ВЕБ-КЛИЕНТА ==================== -->
       <section id="tab-webclient" class="tab-pane">
         <div class="card" style="margin-bottom:15px">
-          <div class="card-title" style="margin-bottom:6px">
+          <div class="card-title" style="margin-bottom:8px">
             <span>Язык интерфейса</span>
             <div class="filter-pills" role="group" aria-label="Язык интерфейса">
-              <button class="filter-pill active" id="btn-lang-ru" onclick="setUiLanguage('ru', true)">Русский</button>
-              <button class="filter-pill" id="btn-lang-en" onclick="setUiLanguage('en', true)">English</button>
+              <button class="filter-pill lang-pill-btn active" id="btn-lang-ru" onclick="setUiLanguage('ru', true)"><svg class="flag-ico" viewBox="0 0 24 16" aria-hidden="true"><rect width="24" height="5.34" fill="#fff"/><rect y="5.33" width="24" height="5.34" fill="#1d63dc"/><rect y="10.66" width="24" height="5.34" fill="#dc2626"/></svg><span>Русский</span></button>
+              <button class="filter-pill lang-pill-btn" id="btn-lang-en" onclick="setUiLanguage('en', true)"><svg class="flag-ico" viewBox="0 0 24 16" aria-hidden="true"><rect width="24" height="16" fill="#012169"/><path d="M0 0L24 16M24 0L0 16" stroke="#fff" stroke-width="3.2"/><path d="M0 0L24 16M24 0L0 16" stroke="#c8102e" stroke-width="1.5"/><path d="M12 0V16M0 8H24" stroke="#fff" stroke-width="5"/><path d="M12 0V16M0 8H24" stroke="#c8102e" stroke-width="2.8"/></svg><span>English</span></button>
             </div>
           </div>
-          <div style="font-size:12px;color:var(--muted)">Мгновенно переключает весь веб-интерфейс и сохраняет выбор в локальной базе.</div>
+          <div class="toggle-row" style="padding:8px 0 0;border-bottom:none">
+            <div class="toggle-info"><b>Спрашивать язык при запуске</b><span>Показывать окно выбора языка при каждом открытии файла</span></div>
+            <label class="switch"><input type="checkbox" id="ui-chk-ask-lang" checked onchange="toggleAskLangOnStart(this.checked)"><span class="slider"></span></label>
+          </div>
         </div>
 
         <div class="card">
@@ -9978,6 +10045,41 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- STARTUP LANGUAGE PICKER MODAL -->
+<div class="modal-backdrop center" id="lang-modal-backdrop" onclick="if(event.target===this) closeLangModal()">
+  <div class="lang-modal-box" id="lang-modal" role="dialog" aria-modal="true" aria-label="Language selection">
+    <div class="lang-modal-head">
+      <div class="lang-modal-badge">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      </div>
+      <div class="lang-modal-title">Выберите язык / Choose Language</div>
+      <div class="lang-modal-sub">Вы всегда сможете сменить язык позже во вкладке «Веб-клиент»<br/>You can switch the language anytime in Web Client settings</div>
+    </div>
+    <div class="lang-pick-grid">
+      <button class="lang-pick-card" id="lang-pick-ru" onclick="chooseStartupLanguage('ru')">
+        <svg class="flag-ico flag-ico-lg" viewBox="0 0 24 16" aria-hidden="true"><rect width="24" height="5.34" fill="#fff"/><rect y="5.33" width="24" height="5.34" fill="#1d63dc"/><rect y="10.66" width="24" height="5.34" fill="#dc2626"/></svg>
+        <span>
+          <span class="lang-pick-name">Русский</span>
+          <span class="lang-pick-sub">Русский интерфейс</span>
+        </span>
+      </button>
+      <button class="lang-pick-card" id="lang-pick-en" onclick="chooseStartupLanguage('en')">
+        <svg class="flag-ico flag-ico-lg" viewBox="0 0 24 16" aria-hidden="true"><rect width="24" height="16" fill="#012169"/><path d="M0 0L24 16M24 0L0 16" stroke="#fff" stroke-width="3.2"/><path d="M0 0L24 16M24 0L0 16" stroke="#c8102e" stroke-width="1.5"/><path d="M12 0V16M0 8H24" stroke="#fff" stroke-width="5"/><path d="M12 0V16M0 8H24" stroke="#c8102e" stroke-width="2.8"/></svg>
+        <span>
+          <span class="lang-pick-name">English</span>
+          <span class="lang-pick-sub">English interface</span>
+        </span>
+      </button>
+    </div>
+    <div class="lang-modal-foot">
+      <label>
+        <input type="checkbox" id="lang-dont-ask" />
+        <span>Не спрашивать снова / Don't ask again</span>
+      </label>
+    </div>
+  </div>
+</div>
+
 <div id="toast-wrap"></div>
 
 <script>
@@ -10013,20 +10115,20 @@ const TAB_TITLES_EN = {
 function getTabTitle(name) { return (uiLang === 'en' ? TAB_TITLES_EN : TAB_TITLES_RU)[name] || name; }
 
 const BUILTIN_PRESET_EN = {
-  dm_shrek: { name: 'Shrekuchka Assistant (DM)', tag: 'DM' },
+  dm_shrek: { name: 'Assistant (DM)', tag: 'DM' },
   srv_kawaii: { name: 'Kawaii Girl (Server)', tag: 'Server' },
   sarcastic_friend: { name: 'Sarcastic Friend', tag: 'General' },
   business_assistant: { name: 'Business Assistant', tag: 'DM' },
   meme_gamer: { name: 'Meme Gamer', tag: 'Server' },
 };
 
-const UI_STATIC_EN = {"Загрузка...": "Loading...", "Основное": "Core", "Обзор и Логи": "Overview & Logs", "Роли и Тестер": "Roles & Sandbox", "База и медиа": "Data & Media", "Каналы и Память": "Channels & Memory", "ВСЕ": "ALL", "Досье": "Dossiers", "Сохранёнки": "Saved Memes", "Интерактив": "Interactive", "Аналитика": "Analytics", "Граф отношений": "Social Graph", "Мини-игры": "Mini-Games", "Система": "System", "Веб-клиент": "Web Client", "Настройки": "Settings", "Проверить LM Studio": "Check LM Studio", "Остановить бота": "Stop Bot", "Обзор, логи и диагностика": "Overview, Logs & Diagnostics", "Поиск": "Search", "Подключение аккаунта Discord": "Connect Discord Account", "Вставь пользовательский токен Discord сюда — редактировать код не нужно. Токен защищается локально в SQLite.": "Paste your Discord user token here — no code editing required. Stored locally with protection in SQLite.", "Показать": "Show", "Запомнить": "Remember", "Подключить": "Connect", "Как быстро достать токен в браузере?": "How to get your token in the browser?", "Открой": "Open", "→ нажми": "→ press", "→ вкладка": "→ tab", "→ фильтр": "→ filter", "→ впиши": "→ type", "Открой любой чат, кликни на запрос": "Open any chat, click request", "→ скопируй": "→ copy", "Отправлено ответов": "Replies Sent", "ЛС: 0 • SRV: 0 • Мемы: 0 • GIF: 0": "DM: 0 • SRV: 0 • Memes: 0 • GIF: 0", "Потоки нейросети": "LLM Streams", "Очередь: 0 • Vision: 0 • Ошибок: 0": "Queue: 0 • Vision: 0 • Errors: 0", "Активные роли": "Active Roles", "ЛС": "DM", "Помощник Шрекучки": "Shrekuchka Assistant", "Каваи-девочка": "Kawaii Girl", "Память и база": "Memory & DB", "Сброс кэша": "Clear Cache", "0 досье": "0 dossiers", "SQLite: 0 сообщ. • Кэш: 0": "SQLite: 0 msgs • Cache: 0", "Модули и поведение": "Modules & Behavior", "20 функций": "20 features", "Общение": "Chatting", "Ответы в ЛС": "DM Replies", "Серии (Bursts)": "Message Bursts", "Анти-клише": "Anti-Cliché", "Игнор ботов": "Ignore Bots", "Игры / Spotify": "Games / Spotify", "Память и события": "Memory & Events", "Долгая память FTS5": "Long Memory FTS5", "Досье юзеров": "User Dossiers", "Автосжатие": "Auto-Compact", "Напоминания": "Reminders", "События / ДР": "Events / BDays", "Защита и LLM": "Safety & LLM", "Автомодель LLM": "Auto-Pick Model", "Ghost-пинги": "Ghost Pings", "Шкала Affinity": "Affinity Scale", "Медиа и игры": "Media & Games", "Зрение (Vision)": "Vision (Images)", "Ссылки GIF": "GIF Links", "Гифки (API)": "GIFs (API)", "Генерация и антиповтор": "Generation & Anti-Repeat", "Шанс случайного врыва на серверах": "Random Server Reply Chance", "Склейка серийных сообщений (Debounce)": "Message Burst Debounce", "2.6с": "2.6s", "Одновременных запросов к LLM": "Concurrent LLM Requests", "Температура (креативность)": "Temperature (Creativity)", "Штраф повторов (Frequency Penalty)": "Frequency Penalty", "Максимум токенов на ответ": "Max Response Tokens", "Живые логи": "Live Logs", "Лента событий (": "Activity Feed (", "Почему промолчал (": "Skip Reasons (", "Все": "All", "Автоскролл: ВКЛ": "Autoscroll: ON", "Копировать": "Copy", "Очистить": "Clear", "Причины каждого пропущенного сообщения": "Reasons for every skipped message", "Карточки ответов и событий в реальном времени": "Real-time reply & event cards", "Пресеты характеров": "Persona Presets", "+ Сохранить как пресет": "+ Save as Preset", "Из роли Сервера": "From Server Role", "Из роли ЛС": "From DM Role", "Сохранить": "Save", "Общая роль ЛС": "Default DM Role", "изменено": "modified", "Сброс": "Reset", "Общая роль Серверов": "Default Server Role", "Индивидуальные роли (Overrides)": "Custom Role Overrides", "Приоритет: Человек > Канал > Сервер > Общая": "Priority: User > Channel > Server > Default", "Человек (User ID)": "User (User ID)", "Канал (Channel ID)": "Channel (Channel ID)", "Сервер (Guild ID)": "Server (Guild ID)", "Сохранить роль": "Save Override", "Песочница (текст, Vision, ссылки GIF, мемы)": "Sandbox (Text, Vision, GIF Links, Memes)", "Роль ЛС": "DM Role", "Роль Сервера": "Server Role", "картинка.png": "image.png", "Убрать": "Remove", "Фото / GIF": "Photo / GIF", "Отправить": "Send", "Арена A/B (сравнение 2 вариантов ответа)": "A/B Arena (Compare 2 Variants)", "Параллельный тест температур, ролей или моделей": "Side-by-side test of temperatures, roles, or models", "Вариант A": "Variant A", "Сервер": "Server", "Ответ A появится здесь...": "Response A will appear here...", "Вариант B": "Variant B", "Ответ B появится здесь...": "Response B will appear here...", "Сравнить A vs B": "Compare A vs B", "Белый список каналов": "Channel Whitelist", "Слушать ВСЕ": "Listen ALL", "+ Добавить": "+ Add", "Нажми «Обновить»...": "Click Refresh...", "Обновить": "Refresh", "Чёрный список и триггер-слова": "Blacklist & Trigger Words", "Чёрный список (User ID через запятую)": "Blacklist (comma-separated User IDs)", "Ключевые слова-триггеры (через запятую)": "Trigger keywords (comma-separated)", "Сохранить фильтры": "Save Filters", "Быстрая очистка памяти": "Quick Memory Clear", "Сжать старую": "Compact Old", "Умные напоминания в чате (": "Smart Chat Reminders (", "+ Таймер": "+ Timer", "Трекер дат и событий — ДР, экзамены (": "Events & Birthdays Tracker (", "Ежегодн.": "Yearly", "Поиск по всей долгой памяти": "Search Long-Term Memory", "Мгновенный поиск по архиву переписки в SQLite": "Instant full-text search across SQLite chat archive", "Найти": "Search", "Редактор истории диалогов": "Conversation Memory Editor", "Обновить список": "Refresh List", "Выбери диалог слева": "Select a thread on the left", "Очистить ветку": "Clear Thread", "Собранные досье и симпатия": "Collected Dossiers & Affinity", "Редактор досье": "Dossier Editor", "Имя / Ник": "Name / Nickname", "Симпатия (-10 .. +10)": "Affinity (-10 .. +10)", "0 • нейтрально": "0 • neutral", "Настроение": "Mood", "Факты о человеке": "Facts About User", "Сохранить досье": "Save Dossier", "Папка сохранёнок (": "Saved Memes Folder (", "Пересканировать": "Rescan", "Перетащи картинки или гифки сюда (или кликни для выбора)": "Drag & drop images or GIFs here (or click to browse)", "PNG, JPG, WEBP, GIF, MP4, WEBM (до 8 МБ) • Тег модели:": "PNG, JPG, WEBP, GIF, MP4, WEBM (up to 8 MB) • Model tag:", "[MEME: имя]": "[MEME: name]", "Аналитика диалогов": "Dialog Analytics", "Серверы": "Servers", "Все чаты": "All Chats", "Скачать PNG": "Download PNG", "Лидерборд по сообщениям": "Message Leaderboard", "Объём текста (символы)": "Text Volume (Characters)", "Активность по времени (10-мин слоты)": "Activity Over Time (10-min slots)", "Средняя длина: Участник vs Бот": "Avg Length: User vs Bot", "Интерактивный граф отношений и связей": "Interactive Relationship & Social Graph", "Перетаскивай узлы мышкой • Клик = карточка участника": "Drag nodes with mouse • Click = user details", "Выбранный участник": "Selected User", "Кликни на любой узел на графе слева, чтобы увидеть симпатию, настроение и факты.": "Click any node on the graph to view affinity, mood, and dossier facts.", "Динамика симпатии (7 дней)": "Affinity Trend (7 Days)", "Запустить мини-игру в канале Discord": "Start Mini-Game in Discord Channel", "Игра": "Game", "Слова (цепочка на последнюю букву + автосчёт)": "Word Chain (last letter chain + auto-scoring)", "Угадай персонажа / игру (вопросы да/нет)": "20 Questions (guess character / game)", "Данетки (детективная загадка)": "Yes/No Riddles (detective puzzle)", "Правда или действие": "Truth or Dare", "Канал Discord": "Discord Channel", "Выбрать из каналов...": "Pick a channel...", "Своё стартовое слово / загадка (необязательно)": "Custom starter word / riddle (optional)", "Запустить игру в чат": "Launch Game in Chat", "Активные игры": "Active Games", "Таблица лидеров мини-игр (SQLite)": "Mini-Games Leaderboard (SQLite)", "Сбросить счёт": "Reset Scores", "Язык интерфейса": "Interface Language", "Мгновенно переключает весь веб-интерфейс и сохраняет выбор в локальной базе.": "Instantly switches the entire web interface language and saves your choice locally.", "Темы оформления": "Appearance Themes", "Сбросить": "Reset", "Сохранить тему": "Save Theme", "Брендинг и палитра": "Branding & Palette", "Название сайта": "Site Title", "Логотип (1–4 симв.)": "Logo (1–4 chars)", "Подпись внизу сайта": "Footer Text", "Акцент 1": "Accent 1", "Акцент 2": "Accent 2", "Фон": "Background", "Меню": "Sidebar", "Карточки": "Cards", "Текст": "Text", "Геометрия и Custom CSS": "Geometry & Custom CSS", "Ширина меню": "Sidebar Width", "Скругление карточек": "Card Radius", "Масштаб шрифта": "Font Scale", "Компактный режим": "Compact Mode", "Меньше отступов": "Tighter spacing", "Фоновое свечение": "Ambient Glow", "Мягкие градиенты сверху": "Soft top gradients", "Свой CSS-код": "Custom CSS", "Аккаунт Discord и хранилище": "Discord Account & Storage", "Токен Discord": "Discord Token", "Отключить": "Disconnect", "Забыть": "Forget", "Защита:": "Protection:", "Папка:": "Folder:", "Локальная LLM, Vision и Долгая память": "Local LLM, Vision & Long Memory", "Модель (LM Studio)": "Model (LM Studio)", "Найденные...": "Detected...", "API Key (пусто = текущий)": "API Key (empty = keep current)", "Макс. фото": "Max Images", "Досье каждые N": "Dossier Every N", "FTS5 записей": "FTS5 Results", "Fallback из reasoning_content": "Fallback to reasoning_content", "Лучше держать выключенным": "Recommended to keep off", "GPU Guard, Giphy и тайминги": "GPU Guard, Giphy & Timings", "Рейд канала/60с": "Channel Raid/60s", "Флуд юзера/60с": "User Flood/60s", "Обрезка симв.": "Trim Chars", "Удалить": "Delete", "Шанс прикрепить GIF": "GIF Attach Chance", "Чтение мин / макс (с)": "Read Delay Min / Max (s)", "Окно Ghost-пинга (с)": "Ghost Ping Window (s)", "Кулдаун юзера (с)": "User Cooldown (s)", "Кулдаун канала (с)": "Channel Cooldown (s)", "Сохранить и проверить LLM": "Save & Test LLM", "Экспорт JSON": "Export JSON", "Импорт JSON": "Import JSON", "Остановить программу": "Shut Down App", "Есть несохранённые изменения": "You have unsaved changes", "Отменить": "Discard", "выбор": "navigate", "выполнить": "run", "Подтвердите действие": "Confirm Action", "Вы уверены?": "Are you sure?", "Отмена": "Cancel", "Подтвердить": "Confirm", "Настройки аккаунта Discord": "Discord account settings", "Командная палитра (Ctrl+K)": "Command Palette (Ctrl+K)", "Монитор железа (клик = обновить)": "Hardware Monitor (click to refresh)", "Анти-флуд и анти-рейд защита GPU Guard": "GPU Guard anti-flood & anti-raid shield", "Поток событий в реальном времени (SSE)": "Live Server-Sent Events stream (SSE)", "Вставь Discord Token...": "Paste Discord Token...", "Отвечать в личных сообщениях 1-на-1": "Reply in 1-on-1 direct messages", "Разбивать длинные ответы на 2-3 живых сообщения": "Split longer replies into 2-3 natural messages", "Перегенерация шаблонных фраз и повторов": "Silently rewrite robotic clichés & repeats", "Не отвечать на сообщения других ботов": "Ignore messages from other bots", "Чтение текущей игры, стрима и Spotify собеседника": "Read user's current game, stream & Spotify status", "Полнотекстовый поиск по архиву переписки (SQLite FTS5)": "Full-text search across past conversations (SQLite FTS5)", "Автоматический сбор заметок о собеседниках": "Automatically collect notes about users", "Автоматическое сжатие старых диалогов в выжимки": "Automatically compact old dialog batches into summaries", "Таймеры напоминаний прямо из чата": "Reminder timers parsed directly from chat", "Автозапоминание ДР, экзаменов и личных дат": "Auto-remember birthdays, exams & personal dates", "Анти-рейд щит канала и обрезка длинных спам-простыней": "Channel anti-raid shield and long spam text trimmer", "Блокировка взлома промпта и навязанных префиксов": "Block prompt injections and forced message prefixes", "Автовыбор активной модели из LM Studio": "Auto-select loaded chat model from LM Studio", "Реакция на удалённые пинги (Ghost-пинги)": "React when someone deletes a ping/reply (Ghost Ping)", "Динамическая шкала симпатии (-10..+10) и настроения": "Dynamic user affinity (-10..+10) and mood tracking", "Распознавание прикреплённых картинок и кадров GIF": "Analyze attached images and animated GIF frames", "Просмотр превью ссылок Tenor / Klipy / Giphy": "Analyze preview images from Tenor / Klipy / Giphy links", "Отправка гифок через Giphy / Nekos.best": "Send reaction GIFs via Giphy / Nekos.best", "Отправка локальных файлов из папки memes/": "Send local reaction files from memes/ folder", "Интерактивные мини-игры прямо в каналах Discord": "Run interactive mini-games in Discord channels", "Фильтр...": "Filter...", "Название пресета...": "Preset name...", "Тег (ЛС / Сервер)": "Tag (DM / Server)", "Числовой ID...": "Numeric ID...", "Подпись...": "Label...", "Уникальный системный промпт...": "Custom system prompt...", "Собеседник": "User", "Напиши фразу, вставь ссылку GIF или перетащи картинку...": "Type a message, paste a GIF link, or drop an image...", "Температура A": "Temperature A", "Модель (пусто=текущая)": "Model (empty = current)", "Температура B": "Temperature B", "Тестовая фраза для сравнения A vs B...": "Test prompt to compare A vs B...", "ID канала...": "Channel ID...", "Поиск...": "Search...", "бот, кс, го играть": "bot, cs, let's play", "ID канала (пусто = ВСЮ память)": "Channel ID (empty = ALL memory)", "Через сколько минут": "Minutes from now", "Текст напоминания (через N мин)...": "Reminder text (in N min)...", "Имя...": "Name...", "ДД.ММ": "DD.MM", "Событие (День рождения, экзамен...)": "Event (Birthday, exam...)", "Введи слово или фразу из прошлых разговоров...": "Enter a word or phrase from past chats...", "Поиск ветки по нику или каналу...": "Search thread by user or channel...", "Поиск по имени, ID или фактам...": "Search by name, ID, or facts...", "Ник собеседника": "User nickname", "довольна / обижена": "happy / annoyed", "- любит Dota 2\n- часто сидит ночью": "- plays Dota 2\n- often online at night", "Пусто = бот выберет автоматически...": "Empty = bot picks automatically...", "/* Например: .card { backdrop-filter: blur(8px); } */": "/* Example: .card { backdrop-filter: blur(8px); } */", "Новый токен (или пусто для переподключения)": "New token (or empty to reconnect)", "Новый ключ...": "New key...", "Командная палитра": "Command Palette", "Перейти на вкладку или выполнить команду...": "Jump to a tab or run a command..."};
+const UI_STATIC_EN = {"Загрузка...": "Loading...", "Основное": "Core", "Обзор и Логи": "Overview & Logs", "Роли и Тестер": "Roles & Sandbox", "База и медиа": "Data & Media", "Каналы и Память": "Channels & Memory", "ВСЕ": "ALL", "Досье": "Dossiers", "Сохранёнки": "Saved Memes", "Интерактив": "Interactive", "Аналитика": "Analytics", "Граф отношений": "Social Graph", "Мини-игры": "Mini-Games", "Система": "System", "Веб-клиент": "Web Client", "Настройки": "Settings", "Проверить LM Studio": "Check LM Studio", "Остановить бота": "Stop Bot", "Обзор, логи и диагностика": "Overview, Logs & Diagnostics", "Поиск": "Search", "Подключение аккаунта Discord": "Connect Discord Account", "Вставь пользовательский токен Discord сюда — редактировать код не нужно. Токен защищается локально в SQLite.": "Paste your Discord user token here — no code editing required. Stored locally with protection in SQLite.", "Показать": "Show", "Запомнить": "Remember", "Подключить": "Connect", "Как быстро достать токен в браузере?": "How to get your token in the browser?", "Открой": "Open", "→ нажми": "→ press", "→ вкладка": "→ tab", "→ фильтр": "→ filter", "→ впиши": "→ type", "Открой любой чат, кликни на запрос": "Open any chat, click request", "→ скопируй": "→ copy", "Отправлено ответов": "Replies Sent", "ЛС: 0 • SRV: 0 • Мемы: 0 • GIF: 0": "DM: 0 • SRV: 0 • Memes: 0 • GIF: 0", "Потоки нейросети": "LLM Streams", "Очередь: 0 • Vision: 0 • Ошибок: 0": "Queue: 0 • Vision: 0 • Errors: 0", "Активные роли": "Active Roles", "ЛС": "DM", "Помощник": "Assistant", "Каваи-девочка": "Kawaii Girl", "Память и база": "Memory & DB", "Сброс кэша": "Clear Cache", "0 досье": "0 dossiers", "SQLite: 0 сообщ. • Кэш: 0": "SQLite: 0 msgs • Cache: 0", "Модули и поведение": "Modules & Behavior", "20 функций": "20 features", "Общение": "Chatting", "Ответы в ЛС": "DM Replies", "Серии (Bursts)": "Message Bursts", "Анти-клише": "Anti-Cliché", "Игнор ботов": "Ignore Bots", "Игры / Spotify": "Games / Spotify", "Память и события": "Memory & Events", "Долгая память FTS5": "Long Memory FTS5", "Досье юзеров": "User Dossiers", "Автосжатие": "Auto-Compact", "Напоминания": "Reminders", "События / ДР": "Events / BDays", "Защита и LLM": "Safety & LLM", "Автомодель LLM": "Auto-Pick Model", "Ghost-пинги": "Ghost Pings", "Шкала Affinity": "Affinity Scale", "Медиа и игры": "Media & Games", "Зрение (Vision)": "Vision (Images)", "Ссылки GIF": "GIF Links", "Гифки (API)": "GIFs (API)", "Генерация и антиповтор": "Generation & Anti-Repeat", "Шанс случайного врыва на серверах": "Random Server Reply Chance", "Склейка серийных сообщений (Debounce)": "Message Burst Debounce", "2.6с": "2.6s", "Одновременных запросов к LLM": "Concurrent LLM Requests", "Температура (креативность)": "Temperature (Creativity)", "Штраф повторов (Frequency Penalty)": "Frequency Penalty", "Максимум токенов на ответ": "Max Response Tokens", "Живые логи": "Live Logs", "Лента событий (": "Activity Feed (", "Почему промолчал (": "Skip Reasons (", "Все": "All", "Автоскролл: ВКЛ": "Autoscroll: ON", "Копировать": "Copy", "Очистить": "Clear", "Причины каждого пропущенного сообщения": "Reasons for every skipped message", "Карточки ответов и событий в реальном времени": "Real-time reply & event cards", "Пресеты характеров": "Persona Presets", "+ Сохранить как пресет": "+ Save as Preset", "Из роли Сервера": "From Server Role", "Из роли ЛС": "From DM Role", "Сохранить": "Save", "Общая роль ЛС": "Default DM Role", "изменено": "modified", "Сброс": "Reset", "Общая роль Серверов": "Default Server Role", "Индивидуальные роли (Overrides)": "Custom Role Overrides", "Приоритет: Человек > Канал > Сервер > Общая": "Priority: User > Channel > Server > Default", "Человек (User ID)": "User (User ID)", "Канал (Channel ID)": "Channel (Channel ID)", "Сервер (Guild ID)": "Server (Guild ID)", "Сохранить роль": "Save Override", "Песочница (текст, Vision, ссылки GIF, мемы)": "Sandbox (Text, Vision, GIF Links, Memes)", "Роль ЛС": "DM Role", "Роль Сервера": "Server Role", "картинка.png": "image.png", "Убрать": "Remove", "Фото / GIF": "Photo / GIF", "Отправить": "Send", "Арена A/B (сравнение 2 вариантов ответа)": "A/B Arena (Compare 2 Variants)", "Параллельный тест температур, ролей или моделей": "Side-by-side test of temperatures, roles, or models", "Вариант A": "Variant A", "Сервер": "Server", "Ответ A появится здесь...": "Response A will appear here...", "Вариант B": "Variant B", "Ответ B появится здесь...": "Response B will appear here...", "Сравнить A vs B": "Compare A vs B", "Белый список каналов": "Channel Whitelist", "Слушать ВСЕ": "Listen ALL", "+ Добавить": "+ Add", "Нажми «Обновить»...": "Click Refresh...", "Обновить": "Refresh", "Чёрный список и триггер-слова": "Blacklist & Trigger Words", "Чёрный список (User ID через запятую)": "Blacklist (comma-separated User IDs)", "Ключевые слова-триггеры (через запятую)": "Trigger keywords (comma-separated)", "Сохранить фильтры": "Save Filters", "Быстрая очистка памяти": "Quick Memory Clear", "Сжать старую": "Compact Old", "Умные напоминания в чате (": "Smart Chat Reminders (", "+ Таймер": "+ Timer", "Трекер дат и событий — ДР, экзамены (": "Events & Birthdays Tracker (", "Ежегодн.": "Yearly", "Поиск по всей долгой памяти": "Search Long-Term Memory", "Мгновенный поиск по архиву переписки в SQLite": "Instant full-text search across SQLite chat archive", "Найти": "Search", "Редактор истории диалогов": "Conversation Memory Editor", "Обновить список": "Refresh List", "Выбери диалог слева": "Select a thread on the left", "Очистить ветку": "Clear Thread", "Собранные досье и симпатия": "Collected Dossiers & Affinity", "Редактор досье": "Dossier Editor", "Имя / Ник": "Name / Nickname", "Симпатия (-10 .. +10)": "Affinity (-10 .. +10)", "0 • нейтрально": "0 • neutral", "Настроение": "Mood", "Факты о человеке": "Facts About User", "Сохранить досье": "Save Dossier", "Папка сохранёнок (": "Saved Memes Folder (", "Пересканировать": "Rescan", "Перетащи картинки или гифки сюда (или кликни для выбора)": "Drag & drop images or GIFs here (or click to browse)", "PNG, JPG, WEBP, GIF, MP4, WEBM (до 8 МБ) • Тег модели:": "PNG, JPG, WEBP, GIF, MP4, WEBM (up to 8 MB) • Model tag:", "[MEME: имя]": "[MEME: name]", "Аналитика диалогов": "Dialog Analytics", "Серверы": "Servers", "Все чаты": "All Chats", "Скачать PNG": "Download PNG", "Лидерборд по сообщениям": "Message Leaderboard", "Объём текста (символы)": "Text Volume (Characters)", "Активность по времени (10-мин слоты)": "Activity Over Time (10-min slots)", "Средняя длина: Участник vs Бот": "Avg Length: User vs Bot", "Интерактивный граф отношений и связей": "Interactive Relationship & Social Graph", "Перетаскивай узлы мышкой • Клик = карточка участника": "Drag nodes with mouse • Click = user details", "Выбранный участник": "Selected User", "Кликни на любой узел на графе слева, чтобы увидеть симпатию, настроение и факты.": "Click any node on the graph to view affinity, mood, and dossier facts.", "Динамика симпатии (7 дней)": "Affinity Trend (7 Days)", "Запустить мини-игру в канале Discord": "Start Mini-Game in Discord Channel", "Игра": "Game", "Слова (цепочка на последнюю букву + автосчёт)": "Word Chain (last letter chain + auto-scoring)", "Угадай персонажа / игру (вопросы да/нет)": "20 Questions (guess character / game)", "Данетки (детективная загадка)": "Yes/No Riddles (detective puzzle)", "Правда или действие": "Truth or Dare", "Канал Discord": "Discord Channel", "Выбрать из каналов...": "Pick a channel...", "Своё стартовое слово / загадка (необязательно)": "Custom starter word / riddle (optional)", "Запустить игру в чат": "Launch Game in Chat", "Активные игры": "Active Games", "Таблица лидеров мини-игр (SQLite)": "Mini-Games Leaderboard (SQLite)", "Сбросить счёт": "Reset Scores", "Язык интерфейса": "Interface Language", "Спрашивать язык при запуске": "Ask language on startup", "Показывать окно выбора языка при каждом открытии файла": "Show the language picker each time the file is launched", "Темы оформления": "Appearance Themes", "Сбросить": "Reset", "Сохранить тему": "Save Theme", "Брендинг и палитра": "Branding & Palette", "Название сайта": "Site Title", "Логотип (1–4 симв.)": "Logo (1–4 chars)", "Подпись внизу сайта": "Footer Text", "Акцент 1": "Accent 1", "Акцент 2": "Accent 2", "Фон": "Background", "Меню": "Sidebar", "Карточки": "Cards", "Текст": "Text", "Геометрия и Custom CSS": "Geometry & Custom CSS", "Ширина меню": "Sidebar Width", "Скругление карточек": "Card Radius", "Масштаб шрифта": "Font Scale", "Компактный режим": "Compact Mode", "Меньше отступов": "Tighter spacing", "Фоновое свечение": "Ambient Glow", "Мягкие градиенты сверху": "Soft top gradients", "Свой CSS-код": "Custom CSS", "Аккаунт Discord и хранилище": "Discord Account & Storage", "Токен Discord": "Discord Token", "Отключить": "Disconnect", "Забыть": "Forget", "Защита:": "Protection:", "Папка:": "Folder:", "Локальная LLM, Vision и Долгая память": "Local LLM, Vision & Long Memory", "Модель (LM Studio)": "Model (LM Studio)", "Найденные...": "Detected...", "API Key (пусто = текущий)": "API Key (empty = keep current)", "Макс. фото": "Max Images", "Досье каждые N": "Dossier Every N", "FTS5 записей": "FTS5 Results", "Fallback из reasoning_content": "Fallback to reasoning_content", "Лучше держать выключенным": "Recommended to keep off", "GPU Guard, Giphy и тайминги": "GPU Guard, Giphy & Timings", "Рейд канала/60с": "Channel Raid/60s", "Флуд юзера/60с": "User Flood/60s", "Обрезка симв.": "Trim Chars", "Удалить": "Delete", "Шанс прикрепить GIF": "GIF Attach Chance", "Чтение мин / макс (с)": "Read Delay Min / Max (s)", "Окно Ghost-пинга (с)": "Ghost Ping Window (s)", "Кулдаун юзера (с)": "User Cooldown (s)", "Кулдаун канала (с)": "Channel Cooldown (s)", "Сохранить и проверить LLM": "Save & Test LLM", "Экспорт JSON": "Export JSON", "Импорт JSON": "Import JSON", "Остановить программу": "Shut Down App", "Есть несохранённые изменения": "You have unsaved changes", "Отменить": "Discard", "выбор": "navigate", "выполнить": "run", "Подтвердите действие": "Confirm Action", "Вы уверены?": "Are you sure?", "Отмена": "Cancel", "Подтвердить": "Confirm", "Настройки аккаунта Discord": "Discord account settings", "Командная палитра (Ctrl+K)": "Command Palette (Ctrl+K)", "Монитор железа (клик = обновить)": "Hardware Monitor (click to refresh)", "Анти-флуд и анти-рейд защита GPU Guard": "GPU Guard anti-flood & anti-raid shield", "Поток событий в реальном времени (SSE)": "Live Server-Sent Events stream (SSE)", "Вставь Discord Token...": "Paste Discord Token...", "Отвечать в личных сообщениях 1-на-1": "Reply in 1-on-1 direct messages", "Разбивать длинные ответы на 2-3 живых сообщения": "Split longer replies into 2-3 natural messages", "Перегенерация шаблонных фраз и повторов": "Silently rewrite robotic clichés & repeats", "Не отвечать на сообщения других ботов": "Ignore messages from other bots", "Чтение текущей игры, стрима и Spotify собеседника": "Read user's current game, stream & Spotify status", "Полнотекстовый поиск по архиву переписки (SQLite FTS5)": "Full-text search across past conversations (SQLite FTS5)", "Автоматический сбор заметок о собеседниках": "Automatically collect notes about users", "Автоматическое сжатие старых диалогов в выжимки": "Automatically compact old dialog batches into summaries", "Таймеры напоминаний прямо из чата": "Reminder timers parsed directly from chat", "Автозапоминание ДР, экзаменов и личных дат": "Auto-remember birthdays, exams & personal dates", "Анти-рейд щит канала и обрезка длинных спам-простыней": "Channel anti-raid shield and long spam text trimmer", "Блокировка взлома промпта и навязанных префиксов": "Block prompt injections and forced message prefixes", "Автовыбор активной модели из LM Studio": "Auto-select loaded chat model from LM Studio", "Реакция на удалённые пинги (Ghost-пинги)": "React when someone deletes a ping/reply (Ghost Ping)", "Динамическая шкала симпатии (-10..+10) и настроения": "Dynamic user affinity (-10..+10) and mood tracking", "Распознавание прикреплённых картинок и кадров GIF": "Analyze attached images and animated GIF frames", "Просмотр превью ссылок Tenor / Klipy / Giphy": "Analyze preview images from Tenor / Klipy / Giphy links", "Отправка гифок через Giphy / Nekos.best": "Send reaction GIFs via Giphy / Nekos.best", "Отправка локальных файлов из папки memes/": "Send local reaction files from memes/ folder", "Интерактивные мини-игры прямо в каналах Discord": "Run interactive mini-games in Discord channels", "Фильтр...": "Filter...", "Название пресета...": "Preset name...", "Тег (ЛС / Сервер)": "Tag (DM / Server)", "Числовой ID...": "Numeric ID...", "Подпись...": "Label...", "Уникальный системный промпт...": "Custom system prompt...", "Собеседник": "User", "Напиши фразу, вставь ссылку GIF или перетащи картинку...": "Type a message, paste a GIF link, or drop an image...", "Температура A": "Temperature A", "Модель (пусто=текущая)": "Model (empty = current)", "Температура B": "Temperature B", "Тестовая фраза для сравнения A vs B...": "Test prompt to compare A vs B...", "ID канала...": "Channel ID...", "Поиск...": "Search...", "бот, кс, го играть": "bot, cs, let's play", "ID канала (пусто = ВСЮ память)": "Channel ID (empty = ALL memory)", "Через сколько минут": "Minutes from now", "Текст напоминания (через N мин)...": "Reminder text (in N min)...", "Имя...": "Name...", "ДД.ММ": "DD.MM", "Событие (День рождения, экзамен...)": "Event (Birthday, exam...)", "Введи слово или фразу из прошлых разговоров...": "Enter a word or phrase from past chats...", "Поиск ветки по нику или каналу...": "Search thread by user or channel...", "Поиск по имени, ID или фактам...": "Search by name, ID, or facts...", "Ник собеседника": "User nickname", "довольна / обижена": "happy / annoyed", "- любит Dota 2\n- часто сидит ночью": "- plays Dota 2\n- often online at night", "Пусто = бот выберет автоматически...": "Empty = bot picks automatically...", "/* Например: .card { backdrop-filter: blur(8px); } */": "/* Example: .card { backdrop-filter: blur(8px); } */", "Новый токен (или пусто для переподключения)": "New token (or empty to reconnect)", "Новый ключ...": "New key...", "Командная палитра": "Command Palette", "Перейти на вкладку или выполнить команду...": "Jump to a tab or run a command..."};
 
 const _i18nDynamicRoots = new Set([
   'log-box','diag-box','timeline-box','chat-box','dossiers-list','memes-grid',
   'mem-threads-list','mem-messages-list','an-kpis','games-active-list','games-leaderboard',
   'user-events-list','reminders-list','fts-results','overrides-list','presets-grid',
-  'channels-list','cmdk-list','toast-wrap','theme-presets-row'
+  'channels-list','cmdk-list','toast-wrap','theme-presets-row','lang-modal-backdrop'
 ]);
 const _i18nDynamicLeafIds = new Set([
   'page-title','sb-discord','sb-llm','btn-master','pill-channels','kpi-replies-split',
@@ -10114,8 +10216,58 @@ function applyUiLanguage(lang, rerender = true) {
   }
 }
 
+let langChosenThisLoad = false;
+
+function openLangModal() {
+  const bd = document.getElementById('lang-modal-backdrop');
+  if (!bd) return;
+  document.getElementById('lang-pick-ru')?.classList.toggle('current', uiLang !== 'en');
+  document.getElementById('lang-pick-en')?.classList.toggle('current', uiLang === 'en');
+  const chk = document.getElementById('lang-dont-ask');
+  if (chk) chk.checked = false;
+  bd.classList.add('open');
+  setTimeout(() => document.getElementById(uiLang === 'en' ? 'lang-pick-en' : 'lang-pick-ru')?.focus(), 30);
+}
+
+function closeLangModal() {
+  document.getElementById('lang-modal-backdrop')?.classList.remove('open');
+  langChosenThisLoad = true;
+  try {
+    sessionStorage.setItem('sb_lang_modal_done', '1');
+    if (serverInstanceId) sessionStorage.setItem('sb_lang_modal_inst', serverInstanceId);
+  } catch (e) {}
+}
+
+async function chooseStartupLanguage(lang) {
+  const norm = (lang === 'en') ? 'en' : 'ru';
+  const dontAsk = !!document.getElementById('lang-dont-ask')?.checked;
+  const askOnStart = !dontAsk;
+  langChosenThisLoad = true;
+  try {
+    sessionStorage.setItem('sb_lang_modal_done', '1');
+    if (serverInstanceId) sessionStorage.setItem('sb_lang_modal_inst', serverInstanceId);
+    localStorage.setItem('sb_ask_lang', askOnStart ? '1' : '0');
+  } catch (e) {}
+  document.getElementById('lang-modal-backdrop')?.classList.remove('open');
+  const chk = document.getElementById('ui-chk-ask-lang');
+  if (chk) chk.checked = askOnStart;
+  applyUiLanguage(norm, true);
+  const res = await api('/api/ui-theme', { method: 'POST', body: JSON.stringify({ language: norm, ask_language_on_start: askOnStart }) });
+  if (res.ok) toast(L('Язык интерфейса: Русский', 'Interface language: English'));
+  else toast(res.error || L('Ошибка', 'Error'), true);
+}
+
+async function toggleAskLangOnStart(enabled) {
+  const val = !!enabled;
+  try { localStorage.setItem('sb_ask_lang', val ? '1' : '0'); } catch (e) {}
+  const res = await api('/api/ui-theme', { method: 'POST', body: JSON.stringify({ ask_language_on_start: val }) });
+  if (res.ok) toast(val ? L('Окно выбора языка при запуске включено', 'Startup language picker enabled') : L('Окно выбора языка при запуске выключено', 'Startup language picker disabled'));
+  else toast(res.error || L('Ошибка', 'Error'), true);
+}
+
 async function setUiLanguage(lang, persist = true) {
   const norm = (lang === 'en') ? 'en' : 'ru';
+  langChosenThisLoad = true;
   applyUiLanguage(norm, true);
   if (persist) {
     const res = await api('/api/ui-theme', { method: 'POST', body: JSON.stringify({ language: norm }) });
@@ -10320,7 +10472,22 @@ function applyState(data) {
   document.getElementById('sb-uptime').textContent = fmtUptime(uptimeBaseSec);
 
   if (data.ui_theme) {
-    if (data.ui_theme.language && data.ui_theme.language !== uiLang) applyUiLanguage(data.ui_theme.language, false);
+    const askStart = data.ui_theme.ask_language_on_start !== false;
+    try { localStorage.setItem('sb_ask_lang', askStart ? '1' : '0'); } catch (e) {}
+    const askChk = document.getElementById('ui-chk-ask-lang');
+    if (askChk) askChk.checked = askStart;
+    if (!langChosenThisLoad && data.ui_theme.language && data.ui_theme.language !== uiLang) {
+      applyUiLanguage(data.ui_theme.language, false);
+    }
+    if (!askStart) {
+      document.getElementById('lang-modal-backdrop')?.classList.remove('open');
+    } else if (data.instance_id && !langChosenThisLoad) {
+      let seenInst = '';
+      try { seenInst = sessionStorage.getItem('sb_lang_modal_inst') || ''; } catch (e) {}
+      if (seenInst !== data.instance_id) openLangModal();
+    } else if (data.instance_id && langChosenThisLoad) {
+      try { sessionStorage.setItem('sb_lang_modal_inst', data.instance_id); } catch (e) {}
+    }
     if (!uiThemeDirty) { applyUiThemeToDOM(data.ui_theme); fillUiThemeForm(data.ui_theme); }
   }
 
@@ -10412,7 +10579,7 @@ function applyState(data) {
   const pct = Math.min(100, Math.round((data.llm.active_requests / Math.max(1, data.llm.max_concurrency)) * 100));
   document.getElementById('bar-streams').style.width = pct + '%';
 
-  document.getElementById('kpi-role-dm').textContent = data.personas.dm_is_default ? L('Помощник Шрекучки', 'Shrekuchka Assistant') : L('Кастомная роль', 'Custom Role');
+  document.getElementById('kpi-role-dm').textContent = data.personas.dm_is_default ? L('Помощник ', ' Assistant') : L('Кастомная роль', 'Custom Role');
   document.getElementById('kpi-role-srv').textContent = data.personas.srv_is_default ? L('Каваи-девочка', 'Kawaii Girl') : L('Кастомная роль', 'Custom Role');
   document.getElementById('kpi-dossiers').textContent = L(`${data.stats.dossiers_count} досье`, `${data.stats.dossiers_count} dossiers`);
   document.getElementById('kpi-mem').textContent =
@@ -11551,6 +11718,7 @@ function fillUiThemeForm(t) {
   document.getElementById('lbl-ui-fs').textContent = (t.font_scale || 100) + '%';
   document.getElementById('ui-chk-compact').checked = !!t.compact_mode;
   document.getElementById('ui-chk-glow').checked = t.ambient_glow !== false;
+  const _askL = document.getElementById('ui-chk-ask-lang'); if (_askL) _askL.checked = t.ask_language_on_start !== false;
   document.getElementById('ui-inp-css').value = t.custom_css || '';
 }
 
@@ -11572,6 +11740,7 @@ function readUiThemeForm() {
     ambient_glow: document.getElementById('ui-chk-glow').checked,
     custom_css: document.getElementById('ui-inp-css').value,
     language: uiLang,
+    ask_language_on_start: document.getElementById('ui-chk-ask-lang')?.checked !== false,
   };
 }
 
@@ -12064,7 +12233,7 @@ function getCmdKItems() {
   const actIco = '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>';
   return [
     { group: gAct, title: activeTxt, sub: L('Мгновенное переключение мастера активности', 'Toggle bot auto-responder on or off'), kw: 'старт пауза вкл выкл toggle start pause bot', ico: actIco, run: () => toggleMaster() },
-    { group: gAct, title: L('Переключить язык: English', 'Switch Language: Русский'), sub: L('Сменить язык веб-интерфейса (RU / EN)', 'Switch web interface language (RU / EN)'), kw: 'язык language english russian ru en locale i18n', ico: actIco, run: () => setUiLanguage(uiLang === 'en' ? 'ru' : 'en', true) },
+    { group: gAct, title: L('Выбрать язык (RU / EN)', 'Choose Language (RU / EN)'), sub: L('Открыть окно выбора языка с флагами', 'Open language picker dialog with flags'), kw: 'язык language english russian ru en locale i18n flag флаг', ico: actIco, run: () => openLangModal() },
     { group: gAct, title: L('Проверить LM Studio', 'Check LM Studio'), sub: L('Пинг локальной LLM и обновление списка моделей', 'Ping local LLM server and refresh model list'), kw: 'ping llm lm studio тест модель check', ico: actIco, run: () => pingLLM() },
     { group: gAct, title: L('Сбросить кэш ответов', 'Clear Reply Cache'), sub: L('Очистить TTL-кэш быстрых реплик в RAM', 'Clear in-memory TTL response cache'), kw: 'cache clear сброс кэш', ico: actIco, run: () => clearCache() },
     { group: gAct, title: L('Экспорт бэкапа JSON', 'Export JSON Backup'), sub: L('Скачать настройки, роли и досье (без секретов)', 'Download settings, roles & dossiers (no secrets)'), kw: 'backup export json бэкап экспорт', ico: actIco, run: () => exportBackup() },
@@ -12169,6 +12338,11 @@ document.addEventListener('keydown', (ev) => {
     if (bd.classList.contains('open')) closeCmdK(); else openCmdK();
     return;
   }
+  if (document.getElementById('lang-modal-backdrop')?.classList.contains('open')) {
+    if (ev.key === 'Escape') { ev.preventDefault(); closeLangModal(); return; }
+    if (ev.key === '1') { ev.preventDefault(); chooseStartupLanguage('ru'); return; }
+    if (ev.key === '2') { ev.preventDefault(); chooseStartupLanguage('en'); return; }
+  }
   if (ev.key === 'Escape') {
     if (document.getElementById('confirm-backdrop')?.classList.contains('open')) {
       ev.preventDefault(); resolveConfirm(false);
@@ -12181,6 +12355,7 @@ document.addEventListener('keydown', (ev) => {
 });
 
 applyUiLanguage(uiLang, false);
+try { if (localStorage.getItem('sb_ask_lang') !== '0' && !sessionStorage.getItem('sb_lang_modal_done')) openLangModal(); } catch (e) { openLangModal(); }
 connectSSE();
 </script>
 </body>

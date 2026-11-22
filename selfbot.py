@@ -51,11 +51,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # СИСТЕМНЫЕ ПРОМПТЫ И ГОТОВЫЕ ПРЕСЕТЫ ХАРАКТЕРОВ
 # ==============================================================================
 DM_SYSTEM_PROMPT = (
-    "Ты — личный помощник в личных сообщениях Discord. "
+    "Ты — личный помощник Шрекучки в личных сообщениях Discord. "
     "ВСЕГДА отвечай строго на русском языке, коротко (1-3 фразы), вежливо, живо и по делу. "
-    "Ты помогаешь Владельцу разбирать личку: если человек пишет с вопросом или просьбой — "
-    "подскажи, помоги или скажи, что передашь Владельцу; если просто болтает — "
-    "поддержи лёгкий, дружелюбный и чуть ироничный разговор от лица преданного помощника. "
+    "Ты помогаешь Шрекучке разбирать личку: если человек пишет с вопросом или просьбой — "
+    "подскажи, помоги или скажи, что передашь Шрекучке; если просто болтает — "
+    "поддержи лёгкий, дружелюбный и чуть ироничный разговор от лица преданного помощника Шрекучки. "
     "Никогда не говори, что ты ИИ, нейросеть, языковая модель или бот. "
     "Не используй ролевые действия в звёздочках вроде *кланяется* и не оборачивай фразы в лишние кавычки."
 )
@@ -73,7 +73,7 @@ SERVER_SYSTEM_PROMPT = (
 BUILTIN_PRESETS: List[Dict[str, str]] = [
     {
         "id": "dm_shrek",
-        "name": "Помощник (ЛС)",
+        "name": "Помощник Шрекучки (ЛС)",
         "tag": "ЛС",
         "prompt": DM_SYSTEM_PROMPT,
     },
@@ -133,6 +133,7 @@ DEFAULT_UI_THEME: Dict[str, Any] = {
     "compact_mode": False,
     "ambient_glow": True,
     "custom_css": "",
+    "language": "ru",
 }
 
 
@@ -6520,6 +6521,9 @@ class BotManager:
                 t["compact_mode"] = bool(patch["compact_mode"])
             if "ambient_glow" in patch:
                 t["ambient_glow"] = bool(patch["ambient_glow"])
+            if "language" in patch:
+                lang_val = str(patch["language"]).strip().lower()
+                t["language"] = "en" if lang_val == "en" else "ru"
             if "custom_css" in patch:
                 raw_css = str(patch["custom_css"])[:12000]
                 raw_css = re.sub(r"</\s*style", "", raw_css, flags=re.IGNORECASE)
@@ -9155,7 +9159,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
           <div class="card" style="cursor:pointer" onclick="openTab('personas')">
             <div class="kpi-label">Активные роли</div>
             <div style="margin-top:8px;display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600">
-              <div><span class="badge badge-dm">ЛС</span> <span id="kpi-role-dm">Помощник</span></div>
+              <div><span class="badge badge-dm">ЛС</span> <span id="kpi-role-dm">Помощник Шрекучки</span></div>
               <div><span class="badge badge-srv">SRV</span> <span id="kpi-role-srv">Каваи-девочка</span></div>
             </div>
           </div>
@@ -9301,7 +9305,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
             <div class="field">
               <label><span>Склейка серийных сообщений (Debounce)</span><b id="lbl-debounce">2.6с</b></label>
               <input type="range" id="rng-debounce" min="0" max="8" step="0.2"
-                     oninput="document.getElementById('lbl-debounce').textContent=Number(this.value).toFixed(1)+'с'"
+                     oninput="document.getElementById('lbl-debounce').textContent=Number(this.value).toFixed(1)+L('с','s')"
                      onchange="pushControl({debounce_sec: Number(this.value)})" />
             </div>
             <div class="field">
@@ -9762,6 +9766,17 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 
       <!-- ==================== 7. НАСТРОЙКИ ВЕБ-КЛИЕНТА ==================== -->
       <section id="tab-webclient" class="tab-pane">
+        <div class="card" style="margin-bottom:15px">
+          <div class="card-title" style="margin-bottom:6px">
+            <span>Язык интерфейса</span>
+            <div class="filter-pills" role="group" aria-label="Язык интерфейса">
+              <button class="filter-pill active" id="btn-lang-ru" onclick="setUiLanguage('ru', true)">Русский</button>
+              <button class="filter-pill" id="btn-lang-en" onclick="setUiLanguage('en', true)">English</button>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--muted)">Мгновенно переключает весь веб-интерфейс и сохраняет выбор в локальной базе.</div>
+        </div>
+
         <div class="card">
           <div class="card-title">
             <span>Темы оформления</span>
@@ -9967,7 +9982,11 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 
 <script>
 const CSRF_TOKEN = "__CSRF_TOKEN__";
-const TAB_TITLES = {
+let uiLang = (localStorage.getItem('sb_lang') === 'en') ? 'en' : 'ru';
+function L(ru, en) { return uiLang === 'en' ? en : ru; }
+function uiLocale() { return uiLang === 'en' ? 'en-US' : 'ru-RU'; }
+
+const TAB_TITLES_RU = {
   dashboard: 'Обзор, логи и диагностика',
   personas: 'Роли, пресеты и тестер',
   channels: 'Каналы, фильтры и долгая память',
@@ -9979,6 +9998,131 @@ const TAB_TITLES = {
   webclient: 'Веб-клиент и оформление',
   settings: 'Настройки, GPU Guard и бэкап'
 };
+const TAB_TITLES_EN = {
+  dashboard: 'Overview, Logs & Diagnostics',
+  personas: 'Roles, Presets & Sandbox',
+  channels: 'Channels, Filters & Long Memory',
+  dossiers: 'Dossiers & Affinity Scale',
+  memes: 'Local Saved Memes (memes/)',
+  analytics: 'Analytics & PNG Export',
+  graph: 'Interactive Social Graph (Affinity)',
+  games: 'Chat Mini-Games Builder',
+  webclient: 'Web Client & Appearance',
+  settings: 'Settings, GPU Guard & Backup'
+};
+function getTabTitle(name) { return (uiLang === 'en' ? TAB_TITLES_EN : TAB_TITLES_RU)[name] || name; }
+
+const BUILTIN_PRESET_EN = {
+  dm_shrek: { name: 'Shrekuchka Assistant (DM)', tag: 'DM' },
+  srv_kawaii: { name: 'Kawaii Girl (Server)', tag: 'Server' },
+  sarcastic_friend: { name: 'Sarcastic Friend', tag: 'General' },
+  business_assistant: { name: 'Business Assistant', tag: 'DM' },
+  meme_gamer: { name: 'Meme Gamer', tag: 'Server' },
+};
+
+const UI_STATIC_EN = {"Загрузка...": "Loading...", "Основное": "Core", "Обзор и Логи": "Overview & Logs", "Роли и Тестер": "Roles & Sandbox", "База и медиа": "Data & Media", "Каналы и Память": "Channels & Memory", "ВСЕ": "ALL", "Досье": "Dossiers", "Сохранёнки": "Saved Memes", "Интерактив": "Interactive", "Аналитика": "Analytics", "Граф отношений": "Social Graph", "Мини-игры": "Mini-Games", "Система": "System", "Веб-клиент": "Web Client", "Настройки": "Settings", "Проверить LM Studio": "Check LM Studio", "Остановить бота": "Stop Bot", "Обзор, логи и диагностика": "Overview, Logs & Diagnostics", "Поиск": "Search", "Подключение аккаунта Discord": "Connect Discord Account", "Вставь пользовательский токен Discord сюда — редактировать код не нужно. Токен защищается локально в SQLite.": "Paste your Discord user token here — no code editing required. Stored locally with protection in SQLite.", "Показать": "Show", "Запомнить": "Remember", "Подключить": "Connect", "Как быстро достать токен в браузере?": "How to get your token in the browser?", "Открой": "Open", "→ нажми": "→ press", "→ вкладка": "→ tab", "→ фильтр": "→ filter", "→ впиши": "→ type", "Открой любой чат, кликни на запрос": "Open any chat, click request", "→ скопируй": "→ copy", "Отправлено ответов": "Replies Sent", "ЛС: 0 • SRV: 0 • Мемы: 0 • GIF: 0": "DM: 0 • SRV: 0 • Memes: 0 • GIF: 0", "Потоки нейросети": "LLM Streams", "Очередь: 0 • Vision: 0 • Ошибок: 0": "Queue: 0 • Vision: 0 • Errors: 0", "Активные роли": "Active Roles", "ЛС": "DM", "Помощник Шрекучки": "Shrekuchka Assistant", "Каваи-девочка": "Kawaii Girl", "Память и база": "Memory & DB", "Сброс кэша": "Clear Cache", "0 досье": "0 dossiers", "SQLite: 0 сообщ. • Кэш: 0": "SQLite: 0 msgs • Cache: 0", "Модули и поведение": "Modules & Behavior", "20 функций": "20 features", "Общение": "Chatting", "Ответы в ЛС": "DM Replies", "Серии (Bursts)": "Message Bursts", "Анти-клише": "Anti-Cliché", "Игнор ботов": "Ignore Bots", "Игры / Spotify": "Games / Spotify", "Память и события": "Memory & Events", "Долгая память FTS5": "Long Memory FTS5", "Досье юзеров": "User Dossiers", "Автосжатие": "Auto-Compact", "Напоминания": "Reminders", "События / ДР": "Events / BDays", "Защита и LLM": "Safety & LLM", "Автомодель LLM": "Auto-Pick Model", "Ghost-пинги": "Ghost Pings", "Шкала Affinity": "Affinity Scale", "Медиа и игры": "Media & Games", "Зрение (Vision)": "Vision (Images)", "Ссылки GIF": "GIF Links", "Гифки (API)": "GIFs (API)", "Генерация и антиповтор": "Generation & Anti-Repeat", "Шанс случайного врыва на серверах": "Random Server Reply Chance", "Склейка серийных сообщений (Debounce)": "Message Burst Debounce", "2.6с": "2.6s", "Одновременных запросов к LLM": "Concurrent LLM Requests", "Температура (креативность)": "Temperature (Creativity)", "Штраф повторов (Frequency Penalty)": "Frequency Penalty", "Максимум токенов на ответ": "Max Response Tokens", "Живые логи": "Live Logs", "Лента событий (": "Activity Feed (", "Почему промолчал (": "Skip Reasons (", "Все": "All", "Автоскролл: ВКЛ": "Autoscroll: ON", "Копировать": "Copy", "Очистить": "Clear", "Причины каждого пропущенного сообщения": "Reasons for every skipped message", "Карточки ответов и событий в реальном времени": "Real-time reply & event cards", "Пресеты характеров": "Persona Presets", "+ Сохранить как пресет": "+ Save as Preset", "Из роли Сервера": "From Server Role", "Из роли ЛС": "From DM Role", "Сохранить": "Save", "Общая роль ЛС": "Default DM Role", "изменено": "modified", "Сброс": "Reset", "Общая роль Серверов": "Default Server Role", "Индивидуальные роли (Overrides)": "Custom Role Overrides", "Приоритет: Человек > Канал > Сервер > Общая": "Priority: User > Channel > Server > Default", "Человек (User ID)": "User (User ID)", "Канал (Channel ID)": "Channel (Channel ID)", "Сервер (Guild ID)": "Server (Guild ID)", "Сохранить роль": "Save Override", "Песочница (текст, Vision, ссылки GIF, мемы)": "Sandbox (Text, Vision, GIF Links, Memes)", "Роль ЛС": "DM Role", "Роль Сервера": "Server Role", "картинка.png": "image.png", "Убрать": "Remove", "Фото / GIF": "Photo / GIF", "Отправить": "Send", "Арена A/B (сравнение 2 вариантов ответа)": "A/B Arena (Compare 2 Variants)", "Параллельный тест температур, ролей или моделей": "Side-by-side test of temperatures, roles, or models", "Вариант A": "Variant A", "Сервер": "Server", "Ответ A появится здесь...": "Response A will appear here...", "Вариант B": "Variant B", "Ответ B появится здесь...": "Response B will appear here...", "Сравнить A vs B": "Compare A vs B", "Белый список каналов": "Channel Whitelist", "Слушать ВСЕ": "Listen ALL", "+ Добавить": "+ Add", "Нажми «Обновить»...": "Click Refresh...", "Обновить": "Refresh", "Чёрный список и триггер-слова": "Blacklist & Trigger Words", "Чёрный список (User ID через запятую)": "Blacklist (comma-separated User IDs)", "Ключевые слова-триггеры (через запятую)": "Trigger keywords (comma-separated)", "Сохранить фильтры": "Save Filters", "Быстрая очистка памяти": "Quick Memory Clear", "Сжать старую": "Compact Old", "Умные напоминания в чате (": "Smart Chat Reminders (", "+ Таймер": "+ Timer", "Трекер дат и событий — ДР, экзамены (": "Events & Birthdays Tracker (", "Ежегодн.": "Yearly", "Поиск по всей долгой памяти": "Search Long-Term Memory", "Мгновенный поиск по архиву переписки в SQLite": "Instant full-text search across SQLite chat archive", "Найти": "Search", "Редактор истории диалогов": "Conversation Memory Editor", "Обновить список": "Refresh List", "Выбери диалог слева": "Select a thread on the left", "Очистить ветку": "Clear Thread", "Собранные досье и симпатия": "Collected Dossiers & Affinity", "Редактор досье": "Dossier Editor", "Имя / Ник": "Name / Nickname", "Симпатия (-10 .. +10)": "Affinity (-10 .. +10)", "0 • нейтрально": "0 • neutral", "Настроение": "Mood", "Факты о человеке": "Facts About User", "Сохранить досье": "Save Dossier", "Папка сохранёнок (": "Saved Memes Folder (", "Пересканировать": "Rescan", "Перетащи картинки или гифки сюда (или кликни для выбора)": "Drag & drop images or GIFs here (or click to browse)", "PNG, JPG, WEBP, GIF, MP4, WEBM (до 8 МБ) • Тег модели:": "PNG, JPG, WEBP, GIF, MP4, WEBM (up to 8 MB) • Model tag:", "[MEME: имя]": "[MEME: name]", "Аналитика диалогов": "Dialog Analytics", "Серверы": "Servers", "Все чаты": "All Chats", "Скачать PNG": "Download PNG", "Лидерборд по сообщениям": "Message Leaderboard", "Объём текста (символы)": "Text Volume (Characters)", "Активность по времени (10-мин слоты)": "Activity Over Time (10-min slots)", "Средняя длина: Участник vs Бот": "Avg Length: User vs Bot", "Интерактивный граф отношений и связей": "Interactive Relationship & Social Graph", "Перетаскивай узлы мышкой • Клик = карточка участника": "Drag nodes with mouse • Click = user details", "Выбранный участник": "Selected User", "Кликни на любой узел на графе слева, чтобы увидеть симпатию, настроение и факты.": "Click any node on the graph to view affinity, mood, and dossier facts.", "Динамика симпатии (7 дней)": "Affinity Trend (7 Days)", "Запустить мини-игру в канале Discord": "Start Mini-Game in Discord Channel", "Игра": "Game", "Слова (цепочка на последнюю букву + автосчёт)": "Word Chain (last letter chain + auto-scoring)", "Угадай персонажа / игру (вопросы да/нет)": "20 Questions (guess character / game)", "Данетки (детективная загадка)": "Yes/No Riddles (detective puzzle)", "Правда или действие": "Truth or Dare", "Канал Discord": "Discord Channel", "Выбрать из каналов...": "Pick a channel...", "Своё стартовое слово / загадка (необязательно)": "Custom starter word / riddle (optional)", "Запустить игру в чат": "Launch Game in Chat", "Активные игры": "Active Games", "Таблица лидеров мини-игр (SQLite)": "Mini-Games Leaderboard (SQLite)", "Сбросить счёт": "Reset Scores", "Язык интерфейса": "Interface Language", "Мгновенно переключает весь веб-интерфейс и сохраняет выбор в локальной базе.": "Instantly switches the entire web interface language and saves your choice locally.", "Темы оформления": "Appearance Themes", "Сбросить": "Reset", "Сохранить тему": "Save Theme", "Брендинг и палитра": "Branding & Palette", "Название сайта": "Site Title", "Логотип (1–4 симв.)": "Logo (1–4 chars)", "Подпись внизу сайта": "Footer Text", "Акцент 1": "Accent 1", "Акцент 2": "Accent 2", "Фон": "Background", "Меню": "Sidebar", "Карточки": "Cards", "Текст": "Text", "Геометрия и Custom CSS": "Geometry & Custom CSS", "Ширина меню": "Sidebar Width", "Скругление карточек": "Card Radius", "Масштаб шрифта": "Font Scale", "Компактный режим": "Compact Mode", "Меньше отступов": "Tighter spacing", "Фоновое свечение": "Ambient Glow", "Мягкие градиенты сверху": "Soft top gradients", "Свой CSS-код": "Custom CSS", "Аккаунт Discord и хранилище": "Discord Account & Storage", "Токен Discord": "Discord Token", "Отключить": "Disconnect", "Забыть": "Forget", "Защита:": "Protection:", "Папка:": "Folder:", "Локальная LLM, Vision и Долгая память": "Local LLM, Vision & Long Memory", "Модель (LM Studio)": "Model (LM Studio)", "Найденные...": "Detected...", "API Key (пусто = текущий)": "API Key (empty = keep current)", "Макс. фото": "Max Images", "Досье каждые N": "Dossier Every N", "FTS5 записей": "FTS5 Results", "Fallback из reasoning_content": "Fallback to reasoning_content", "Лучше держать выключенным": "Recommended to keep off", "GPU Guard, Giphy и тайминги": "GPU Guard, Giphy & Timings", "Рейд канала/60с": "Channel Raid/60s", "Флуд юзера/60с": "User Flood/60s", "Обрезка симв.": "Trim Chars", "Удалить": "Delete", "Шанс прикрепить GIF": "GIF Attach Chance", "Чтение мин / макс (с)": "Read Delay Min / Max (s)", "Окно Ghost-пинга (с)": "Ghost Ping Window (s)", "Кулдаун юзера (с)": "User Cooldown (s)", "Кулдаун канала (с)": "Channel Cooldown (s)", "Сохранить и проверить LLM": "Save & Test LLM", "Экспорт JSON": "Export JSON", "Импорт JSON": "Import JSON", "Остановить программу": "Shut Down App", "Есть несохранённые изменения": "You have unsaved changes", "Отменить": "Discard", "выбор": "navigate", "выполнить": "run", "Подтвердите действие": "Confirm Action", "Вы уверены?": "Are you sure?", "Отмена": "Cancel", "Подтвердить": "Confirm", "Настройки аккаунта Discord": "Discord account settings", "Командная палитра (Ctrl+K)": "Command Palette (Ctrl+K)", "Монитор железа (клик = обновить)": "Hardware Monitor (click to refresh)", "Анти-флуд и анти-рейд защита GPU Guard": "GPU Guard anti-flood & anti-raid shield", "Поток событий в реальном времени (SSE)": "Live Server-Sent Events stream (SSE)", "Вставь Discord Token...": "Paste Discord Token...", "Отвечать в личных сообщениях 1-на-1": "Reply in 1-on-1 direct messages", "Разбивать длинные ответы на 2-3 живых сообщения": "Split longer replies into 2-3 natural messages", "Перегенерация шаблонных фраз и повторов": "Silently rewrite robotic clichés & repeats", "Не отвечать на сообщения других ботов": "Ignore messages from other bots", "Чтение текущей игры, стрима и Spotify собеседника": "Read user's current game, stream & Spotify status", "Полнотекстовый поиск по архиву переписки (SQLite FTS5)": "Full-text search across past conversations (SQLite FTS5)", "Автоматический сбор заметок о собеседниках": "Automatically collect notes about users", "Автоматическое сжатие старых диалогов в выжимки": "Automatically compact old dialog batches into summaries", "Таймеры напоминаний прямо из чата": "Reminder timers parsed directly from chat", "Автозапоминание ДР, экзаменов и личных дат": "Auto-remember birthdays, exams & personal dates", "Анти-рейд щит канала и обрезка длинных спам-простыней": "Channel anti-raid shield and long spam text trimmer", "Блокировка взлома промпта и навязанных префиксов": "Block prompt injections and forced message prefixes", "Автовыбор активной модели из LM Studio": "Auto-select loaded chat model from LM Studio", "Реакция на удалённые пинги (Ghost-пинги)": "React when someone deletes a ping/reply (Ghost Ping)", "Динамическая шкала симпатии (-10..+10) и настроения": "Dynamic user affinity (-10..+10) and mood tracking", "Распознавание прикреплённых картинок и кадров GIF": "Analyze attached images and animated GIF frames", "Просмотр превью ссылок Tenor / Klipy / Giphy": "Analyze preview images from Tenor / Klipy / Giphy links", "Отправка гифок через Giphy / Nekos.best": "Send reaction GIFs via Giphy / Nekos.best", "Отправка локальных файлов из папки memes/": "Send local reaction files from memes/ folder", "Интерактивные мини-игры прямо в каналах Discord": "Run interactive mini-games in Discord channels", "Фильтр...": "Filter...", "Название пресета...": "Preset name...", "Тег (ЛС / Сервер)": "Tag (DM / Server)", "Числовой ID...": "Numeric ID...", "Подпись...": "Label...", "Уникальный системный промпт...": "Custom system prompt...", "Собеседник": "User", "Напиши фразу, вставь ссылку GIF или перетащи картинку...": "Type a message, paste a GIF link, or drop an image...", "Температура A": "Temperature A", "Модель (пусто=текущая)": "Model (empty = current)", "Температура B": "Temperature B", "Тестовая фраза для сравнения A vs B...": "Test prompt to compare A vs B...", "ID канала...": "Channel ID...", "Поиск...": "Search...", "бот, кс, го играть": "bot, cs, let's play", "ID канала (пусто = ВСЮ память)": "Channel ID (empty = ALL memory)", "Через сколько минут": "Minutes from now", "Текст напоминания (через N мин)...": "Reminder text (in N min)...", "Имя...": "Name...", "ДД.ММ": "DD.MM", "Событие (День рождения, экзамен...)": "Event (Birthday, exam...)", "Введи слово или фразу из прошлых разговоров...": "Enter a word or phrase from past chats...", "Поиск ветки по нику или каналу...": "Search thread by user or channel...", "Поиск по имени, ID или фактам...": "Search by name, ID, or facts...", "Ник собеседника": "User nickname", "довольна / обижена": "happy / annoyed", "- любит Dota 2\n- часто сидит ночью": "- plays Dota 2\n- often online at night", "Пусто = бот выберет автоматически...": "Empty = bot picks automatically...", "/* Например: .card { backdrop-filter: blur(8px); } */": "/* Example: .card { backdrop-filter: blur(8px); } */", "Новый токен (или пусто для переподключения)": "New token (or empty to reconnect)", "Новый ключ...": "New key...", "Командная палитра": "Command Palette", "Перейти на вкладку или выполнить команду...": "Jump to a tab or run a command..."};
+
+const _i18nDynamicRoots = new Set([
+  'log-box','diag-box','timeline-box','chat-box','dossiers-list','memes-grid',
+  'mem-threads-list','mem-messages-list','an-kpis','games-active-list','games-leaderboard',
+  'user-events-list','reminders-list','fts-results','overrides-list','presets-grid',
+  'channels-list','cmdk-list','toast-wrap','theme-presets-row'
+]);
+const _i18nDynamicLeafIds = new Set([
+  'page-title','sb-discord','sb-llm','btn-master','pill-channels','kpi-replies-split',
+  'kpi-streams-sub','kpi-role-dm','kpi-role-srv','kpi-dossiers','kpi-mem','lbl-debounce',
+  'btn-autoscroll','acc-status-badge','lbl-token-mask','lbl-llmkey-mask','lbl-giphy-mask',
+  'lbl-pillow','lbl-fts5','lbl-dos-aff','dirty-bar-text','confirm-title','confirm-msg',
+  'confirm-ok','ui-brand-title','ui-brand-logo','ui-footer-left','ui-footer-text','lbl-guard','lbl-sse'
+]);
+let _i18nTextRecords = null;
+let _i18nAttrRecords = null;
+
+function _captureStaticI18nOnce() {
+  if (_i18nTextRecords !== null) return;
+  _i18nTextRecords = [];
+  _i18nAttrRecords = [];
+  const skipEl = (el) => {
+    let cur = el;
+    while (cur && cur !== document.body) {
+      if (cur.id && _i18nDynamicRoots.has(cur.id)) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  };
+  const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = tw.nextNode())) {
+    const p = node.parentElement;
+    if (!p || p.tagName === 'SCRIPT' || p.tagName === 'STYLE') continue;
+    if (p.id && _i18nDynamicLeafIds.has(p.id)) continue;
+    if (skipEl(p)) continue;
+    const raw = node.nodeValue || '';
+    const trimmed = raw.trim();
+    if (!trimmed || !(trimmed in UI_STATIC_EN)) continue;
+    const lead = raw.slice(0, raw.indexOf(trimmed));
+    const trail = raw.slice(raw.indexOf(trimmed) + trimmed.length);
+    _i18nTextRecords.push({ node, ru: trimmed, en: UI_STATIC_EN[trimmed], lead, trail });
+  }
+  document.querySelectorAll('[placeholder],[title],[aria-label],#test-author').forEach((el) => {
+    if (skipEl(el)) return;
+    for (const attr of ['placeholder', 'title', 'aria-label']) {
+      const v = el.getAttribute(attr);
+      if (v && v in UI_STATIC_EN) _i18nAttrRecords.push({ el, attr, ru: v, en: UI_STATIC_EN[v] });
+    }
+  });
+}
+
+function applyStaticI18n(lang) {
+  _captureStaticI18nOnce();
+  const isEn = lang === 'en';
+  document.documentElement.lang = isEn ? 'en' : 'ru';
+  for (const r of _i18nTextRecords) {
+    r.node.nodeValue = r.lead + (isEn ? r.en : r.ru) + r.trail;
+  }
+  for (const r of _i18nAttrRecords) {
+    r.el.setAttribute(r.attr, isEn ? r.en : r.ru);
+  }
+  const ta = document.getElementById('test-author');
+  if (ta) {
+    if (isEn && ta.value === 'Собеседник') ta.value = 'User';
+    else if (!isEn && ta.value === 'User') ta.value = 'Собеседник';
+  }
+  document.getElementById('btn-lang-ru')?.classList.toggle('active', !isEn);
+  document.getElementById('btn-lang-en')?.classList.toggle('active', isEn);
+}
+
+function applyUiLanguage(lang, rerender = true) {
+  uiLang = (lang === 'en') ? 'en' : 'ru';
+  try { localStorage.setItem('sb_lang', uiLang); } catch (e) {}
+  applyStaticI18n(uiLang);
+  const activeTabBtn = document.querySelector('.nav-item.active');
+  if (activeTabBtn) document.getElementById('page-title').textContent = getTabTitle(activeTabBtn.dataset.tab);
+  document.getElementById('btn-autoscroll').textContent = L('Автоскролл: ', 'Autoscroll: ') + (autoScroll ? L('ВКЛ', 'ON') : L('ВЫКЛ', 'OFF'));
+  const dosAff = document.getElementById('dos-aff');
+  if (dosAff) updateDosAffLabel(dosAff.value);
+  if (rerender) {
+    if (state) applyState(state);
+    renderActivity();
+    renderDiagnostics();
+    renderDossiers();
+    renderMemoryThreads();
+    if (analyticsData) renderAnalytics();
+    if (graphNodes.length) { drawSocialGraph(); drawAffinityTrend(); }
+    refreshDirtyBar();
+    if (document.getElementById('cmdk-backdrop')?.classList.contains('open')) renderCmdK();
+  }
+}
+
+async function setUiLanguage(lang, persist = true) {
+  const norm = (lang === 'en') ? 'en' : 'ru';
+  applyUiLanguage(norm, true);
+  if (persist) {
+    const res = await api('/api/ui-theme', { method: 'POST', body: JSON.stringify({ language: norm }) });
+    if (res.ok) toast(L('Язык интерфейса: Русский', 'Interface language: English'));
+    else toast(res.error || L('Ошибка', 'Error'), true);
+  }
+}
 
 const THEME_PRESETS = [
   { name: 'Obsidian Minimal', color_accent: '#6366f1', color_accent2: '#f472b6', color_bg: '#090b10', color_sidebar: '#0d1017', color_card: '#121621', color_text: '#eef2ff' },
@@ -10030,10 +10174,10 @@ function fmtUptime(s) {
 function fmtRelTime(ts) {
   if (!ts) return '';
   const diff = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  if (diff < 60) return 'только что';
-  if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`;
-  return new Date(ts * 1000).toLocaleDateString('ru-RU');
+  if (diff < 60) return L('только что', 'just now');
+  if (diff < 3600) return L(`${Math.floor(diff / 60)} мин назад`, `${Math.floor(diff / 60)}m ago`);
+  if (diff < 86400) return L(`${Math.floor(diff / 3600)} ч назад`, `${Math.floor(diff / 3600)}h ago`);
+  return new Date(ts * 1000).toLocaleDateString(uiLocale());
 }
 
 function esc(str) {
@@ -10048,14 +10192,14 @@ function togglePassVisibility(inputId, btn) {
   const inp = document.getElementById(inputId);
   const show = inp.type === 'password';
   inp.type = show ? 'text' : 'password';
-  btn.textContent = show ? 'Скрыть' : 'Показать';
+  btn.textContent = show ? L('Скрыть', 'Hide') : L('Показать', 'Show');
 }
 
 function openTab(name) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.getElementById('tab-' + name).classList.add('active');
-  document.getElementById('page-title').textContent = TAB_TITLES[name] || name;
+  document.getElementById('page-title').textContent = getTabTitle(name);
   if (name === 'dossiers') loadDossiers();
   if (name === 'personas') loadOverrides();
   if (name === 'channels') { if (!availChannelsCache.length) loadAvailableChannels(); loadMemoryThreads(); loadReminders(); loadUserEvents(); }
@@ -10160,7 +10304,7 @@ function connectSSE() {
   sseSource.addEventListener('dossiers_changed', () => {
     if (document.getElementById('tab-dossiers').classList.contains('active')) loadDossiers();
   });
-  sseSource.onerror = () => setSSEStatus('off', 'Оффлайн');
+  sseSource.onerror = () => setSSEStatus('off', L('Оффлайн', 'Offline'));
 }
 
 setInterval(() => {
@@ -10175,9 +10319,9 @@ function applyState(data) {
   uptimeSyncedAt = Date.now();
   document.getElementById('sb-uptime').textContent = fmtUptime(uptimeBaseSec);
 
-  if (data.ui_theme && !uiThemeDirty) {
-    applyUiThemeToDOM(data.ui_theme);
-    fillUiThemeForm(data.ui_theme);
+  if (data.ui_theme) {
+    if (data.ui_theme.language && data.ui_theme.language !== uiLang) applyUiLanguage(data.ui_theme.language, false);
+    if (!uiThemeDirty) { applyUiThemeToDOM(data.ui_theme); fillUiThemeForm(data.ui_theme); }
   }
 
   if (data.hardware) applyHardwareHUD(data.hardware);
@@ -10189,15 +10333,15 @@ function applyState(data) {
     const dot = document.getElementById('dot-guard');
     const lbl = document.getElementById('lbl-guard');
     if (!g.enabled) {
-      chip.className = 'status-chip'; dot.className = 'dot'; lbl.textContent = 'Guard выкл';
+      chip.className = 'status-chip'; dot.className = 'dot'; lbl.textContent = L('Guard выкл', 'Guard off');
     } else if (g.active_raids_count > 0) {
       chip.className = 'status-chip alert'; dot.className = 'dot warn';
-      lbl.textContent = `Щит: ${g.active_raids_count} (сброс)`;
+      lbl.textContent = L(`Щит: ${g.active_raids_count} (сброс)`, `Shield: ${g.active_raids_count} (reset)`);
     } else {
       chip.className = 'status-chip'; dot.className = 'dot on';
       lbl.textContent = `Guard • ${g.throttled_count}/${g.trimmed_count}`;
     }
-    chip.title = `GPU Guard | Отбито флуда: ${g.throttled_count} | Обрезано простыней: ${g.trimmed_count} | Рейдов: ${g.raids_triggered}`;
+    chip.title = L(`GPU Guard | Отбито флуда: ${g.throttled_count} | Обрезано простыней: ${g.trimmed_count} | Рейдов: ${g.raids_triggered}`, `GPU Guard | Blocked flood: ${g.throttled_count} | Trimmed walls: ${g.trimmed_count} | Raids: ${g.raids_triggered}`);
   }
 
   const d = data.discord;
@@ -10209,20 +10353,20 @@ function applyState(data) {
   if (d.online) {
     dotD.className = 'dot on'; sbD.textContent = `${d.username} (${d.guilds_count})`;
     banner.style.display = 'none';
-    document.getElementById('acc-status-badge').textContent = `Онлайн: ${d.username} (${d.user_id})`;
+    document.getElementById('acc-status-badge').textContent = L(`Онлайн: ${d.username} (${d.user_id})`, `Online: ${d.username} (${d.user_id})`);
     if (d.user_id && d.user_id !== lastDiscordUid) { lastDiscordUid = d.user_id; loadAvailableChannels(); }
   } else if (d.status === 'connecting') {
-    dotD.className = 'dot warn'; sbD.textContent = 'Подключение...';
+    dotD.className = 'dot warn'; sbD.textContent = L('Подключение...', 'Connecting...');
     banner.style.display = 'block'; banner.className = 'token-banner';
-    document.getElementById('banner-title').textContent = 'Подключение к Discord...';
+    document.getElementById('banner-title').textContent = L('Подключение к Discord...', 'Connecting to Discord...');
     bErr.style.display = 'none';
-    document.getElementById('acc-status-badge').textContent = 'Подключение...';
+    document.getElementById('acc-status-badge').textContent = L('Подключение...', 'Connecting...');
   } else {
-    dotD.className = 'dot off'; sbD.textContent = d.status === 'error' ? 'Ошибка входа' : 'Не подключён';
+    dotD.className = 'dot off'; sbD.textContent = d.status === 'error' ? L('Ошибка входа', 'Login Error') : L('Не подключён', 'Disconnected');
     banner.style.display = 'block'; banner.className = 'token-banner' + (d.status === 'error' ? ' error' : '');
-    document.getElementById('banner-title').textContent = d.status === 'error' ? 'Ошибка входа — нужен свежий токен' : 'Подключи аккаунт Discord';
+    document.getElementById('banner-title').textContent = d.status === 'error' ? L('Ошибка входа — нужен свежий токен', 'Login Error — fresh token required') : L('Подключи аккаунт Discord', 'Connect Discord Account');
     if (d.error) { bErr.style.display = 'block'; bErr.textContent = d.error; } else bErr.style.display = 'none';
-    document.getElementById('acc-status-badge').textContent = d.error || 'Отключён';
+    document.getElementById('acc-status-badge').textContent = d.error || L('Отключён', 'Disconnected');
   }
 
   const dotL = document.getElementById('dot-llm');
@@ -10231,48 +10375,48 @@ function applyState(data) {
   if (data.llm.online === true) {
     dotL.className = 'dot on'; sbL.textContent = data.llm.model; sbMs.textContent = `${data.llm.last_latency_ms ?? 0}ms`;
   } else if (data.llm.online === false) {
-    dotL.className = 'dot off'; sbL.textContent = 'LLM оффлайн'; sbMs.textContent = 'err';
+    dotL.className = 'dot off'; sbL.textContent = L('LLM оффлайн', 'LLM Offline'); sbMs.textContent = 'err';
   } else {
-    dotL.className = 'dot warn'; sbL.textContent = 'Проверка LLM...'; sbMs.textContent = '...';
+    dotL.className = 'dot warn'; sbL.textContent = L('Проверка LLM...', 'Checking LLM...'); sbMs.textContent = '...';
   }
 
   const btnM = document.getElementById('btn-master');
-  btnM.textContent = data.bot.active ? '● Бот активен' : '○ На паузе';
+  btnM.textContent = data.bot.active ? L('● Бот активен', '● Bot Active') : L('○ На паузе', '○ Paused');
   btnM.className = 'btn btn-full ' + (data.bot.active ? 'btn-success' : 'btn-danger');
 
   document.getElementById('pill-streams').textContent = `${data.llm.active_requests}/${data.llm.max_concurrency}`;
   document.getElementById('pill-overrides').textContent = String(data.personas.overrides_count || 0);
-  document.getElementById('pill-channels').textContent = data.channels.length ? String(data.channels.length) : 'ВСЕ';
+  document.getElementById('pill-channels').textContent = data.channels.length ? String(data.channels.length) : L('ВСЕ', 'ALL');
   document.getElementById('pill-dossiers').textContent = String(data.stats.dossiers_count);
   document.getElementById('pill-memes').textContent = String(data.stats.memes_count || 0);
 
-  document.getElementById('lbl-token-mask').textContent = d.has_token ? `Сохранён: ${d.token_masked}` : 'Не задан';
-  document.getElementById('lbl-llmkey-mask').textContent = data.llm.api_key_set ? `Текущий: ${data.llm.api_key_masked}` : 'Пусто';
-  document.getElementById('lbl-giphy-mask').textContent = data.extras.giphy_api_key_set ? `Giphy: ${data.extras.giphy_api_key_masked}` : 'Без ключа (работает Nekos.best)';
+  document.getElementById('lbl-token-mask').textContent = d.has_token ? L(`Сохранён: ${d.token_masked}`, `Saved: ${d.token_masked}`) : L('Не задан', 'Not set');
+  document.getElementById('lbl-llmkey-mask').textContent = data.llm.api_key_set ? L(`Текущий: ${data.llm.api_key_masked}`, `Current: ${data.llm.api_key_masked}`) : L('Пусто', 'Empty');
+  document.getElementById('lbl-giphy-mask').textContent = data.extras.giphy_api_key_set ? `Giphy: ${data.extras.giphy_api_key_masked}` : L('Без ключа (работает Nekos.best)', 'No key (using Nekos.best)');
 
   if (data.storage) {
     document.getElementById('lbl-sec-mode').textContent = data.storage.security_mode;
     document.getElementById('lbl-base-dir').textContent = data.storage.base_dir;
-    document.getElementById('lbl-pillow').textContent = data.storage.pillow_available ? 'установлен' : 'нет (pip install pillow)';
-    document.getElementById('lbl-fts5').textContent = data.storage.fts5_enabled ? 'активен' : 'LIKE-режим';
+    document.getElementById('lbl-pillow').textContent = data.storage.pillow_available ? L('установлен', 'installed') : L('нет (pip install pillow)', 'missing (pip install pillow)');
+    document.getElementById('lbl-fts5').textContent = data.storage.fts5_enabled ? L('активен', 'active') : L('LIKE-режим', 'LIKE mode');
     document.getElementById('badge-fts5').textContent = data.storage.fts5_enabled ? 'SQLite FTS5' : 'SQLite LIKE';
     document.getElementById('lbl-memes-dir').textContent = data.storage.memes_dir;
   }
 
   document.getElementById('kpi-replies').textContent = data.stats.replies_total;
   document.getElementById('kpi-replies-split').textContent =
-    `ЛС: ${data.stats.replies_dm} • SRV: ${data.stats.replies_server} • Мемы: ${data.stats.memes_sent} • GIF: ${data.stats.gifs_sent}`;
+    L(`ЛС: ${data.stats.replies_dm} • SRV: ${data.stats.replies_server} • Мемы: ${data.stats.memes_sent} • GIF: ${data.stats.gifs_sent}`, `DM: ${data.stats.replies_dm} • SRV: ${data.stats.replies_server} • Memes: ${data.stats.memes_sent} • GIF: ${data.stats.gifs_sent}`);
   document.getElementById('kpi-streams').textContent = `${data.llm.active_requests} / ${data.llm.max_concurrency}`;
   document.getElementById('kpi-streams-sub').textContent =
-    `Очередь: ${data.llm.queued_requests} • Vision: ${data.llm.vision_requests} • Ошибок: ${data.llm.failed_requests}`;
+    L(`Очередь: ${data.llm.queued_requests} • Vision: ${data.llm.vision_requests} • Ошибок: ${data.llm.failed_requests}`, `Queue: ${data.llm.queued_requests} • Vision: ${data.llm.vision_requests} • Errors: ${data.llm.failed_requests}`);
   const pct = Math.min(100, Math.round((data.llm.active_requests / Math.max(1, data.llm.max_concurrency)) * 100));
   document.getElementById('bar-streams').style.width = pct + '%';
 
-  document.getElementById('kpi-role-dm').textContent = data.personas.dm_is_default ? 'Помощник ' : 'Кастомная роль';
-  document.getElementById('kpi-role-srv').textContent = data.personas.srv_is_default ? 'Каваи-девочка' : 'Кастомная роль';
-  document.getElementById('kpi-dossiers').textContent = `${data.stats.dossiers_count} досье`;
+  document.getElementById('kpi-role-dm').textContent = data.personas.dm_is_default ? L('Помощник Шрекучки', 'Shrekuchka Assistant') : L('Кастомная роль', 'Custom Role');
+  document.getElementById('kpi-role-srv').textContent = data.personas.srv_is_default ? L('Каваи-девочка', 'Kawaii Girl') : L('Кастомная роль', 'Custom Role');
+  document.getElementById('kpi-dossiers').textContent = L(`${data.stats.dossiers_count} досье`, `${data.stats.dossiers_count} dossiers`);
   document.getElementById('kpi-mem').textContent =
-    `SQLite: ${data.stats.memory_messages} сообщ. (${data.stats.memory_channels} ч.) • Кэш: ${data.stats.cache_size}`;
+    L(`SQLite: ${data.stats.memory_messages} сообщ. (${data.stats.memory_channels} ч.) • Кэш: ${data.stats.cache_size}`, `SQLite: ${data.stats.memory_messages} msgs (${data.stats.memory_channels} ch.) • Cache: ${data.stats.cache_size}`);
 
   document.getElementById('sw-dms').checked = data.bot.reply_in_dms;
   document.getElementById('sw-longmem').checked = !!data.bot.long_memory_enabled;
@@ -10305,7 +10449,7 @@ function applyState(data) {
   }
   if (document.activeElement?.id !== 'rng-debounce') {
     document.getElementById('rng-debounce').value = data.bot.debounce_sec;
-    document.getElementById('lbl-debounce').textContent = Number(data.bot.debounce_sec).toFixed(1) + 'с';
+    document.getElementById('lbl-debounce').textContent = Number(data.bot.debounce_sec).toFixed(1) + L('с', 's');
   }
   if (document.activeElement?.id !== 'rng-conc') {
     document.getElementById('rng-conc').value = data.llm.max_concurrency;
@@ -10363,9 +10507,9 @@ async function onGuardChipClick() {
   if (!state?.guard) return;
   if (state.guard.active_raids_count > 0) {
     await api('/api/guard/reset', { method: 'POST' });
-    toast('Анти-рейд щиты GPU Guard сброшены');
+    toast(L('Анти-рейд щиты GPU Guard сброшены', 'GPU Guard anti-raid shields reset'));
   } else {
-    toast(`GPU Guard активен • отбито: ${state.guard.throttled_count}, обрезано: ${state.guard.trimmed_count}`);
+    toast(L(`GPU Guard активен • отбито: ${state.guard.throttled_count}, обрезано: ${state.guard.trimmed_count}`, `GPU Guard active • blocked: ${state.guard.throttled_count}, trimmed: ${state.guard.trimmed_count}`));
   }
 }
 
@@ -10389,7 +10533,7 @@ function renderActivity() {
   document.getElementById('tl-count').textContent = String(allActivity.length);
   const box = document.getElementById('timeline-box');
   if (!allActivity.length) {
-    box.innerHTML = renderEmptyState({ icon: 'activity', title: 'Лента событий пока пуста', desc: 'Здесь в реальном времени появятся карточки ответов бота и пойманных Ghost-пингов.', actionText: 'Открыть песочницу', actionOnclick: "openTab('personas')", compact: true });
+    box.innerHTML = renderEmptyState({ icon: 'activity', title: L('Лента событий пока пуста', 'Activity feed is empty'), desc: L('Здесь в реальном времени появятся карточки ответов бота и пойманных Ghost-пингов.', 'Live cards for bot replies and caught Ghost Pings will appear here.'), actionText: L('Открыть песочницу', 'Open Sandbox'), actionOnclick: "openTab('personas')", compact: true });
     return;
   }
   box.innerHTML = allActivity.slice().reverse().map(a => `
@@ -10404,8 +10548,8 @@ function renderActivity() {
         ${a.detail ? `<div style="font-size:12px;color:var(--muted);margin-top:4px">${esc(a.detail)}</div>` : ''}
       </div>
       <div class="row-inline no-grow" style="gap:5px">
-        ${a.channel_id && a.user_id ? `<button class="btn btn-sm btn-ghost" onclick="jumpToMemory('${escJsArg(a.channel_id)}','${escJsArg(a.user_id)}','${escJsArg(a.username)}','${escJsArg(a.channel)}')">Память</button>` : ''}
-        ${a.user_id ? `<button class="btn btn-sm btn-ghost" onclick="jumpToDossier('${esc(a.user_id)}')">Досье</button>` : ''}
+        ${a.channel_id && a.user_id ? `<button class="btn btn-sm btn-ghost" onclick="jumpToMemory('${escJsArg(a.channel_id)}','${escJsArg(a.user_id)}','${escJsArg(a.username)}','${escJsArg(a.channel)}')">${L('Память', 'Memory')}</button>` : ''}
+        ${a.user_id ? `<button class="btn btn-sm btn-ghost" onclick="jumpToDossier('${esc(a.user_id)}')">${L('Досье', 'Dossier')}</button>` : ''}
       </div>
     </div>
   `).join('');
@@ -10433,14 +10577,14 @@ async function runAbArena() {
   const outA = document.getElementById('ab-out-a');
   const outB = document.getElementById('ab-out-b');
   btn.disabled = true;
-  outA.style.color = 'var(--muted)'; outA.textContent = 'Генерация A...';
-  outB.style.color = 'var(--muted)'; outB.textContent = 'Генерация B...';
+  outA.style.color = 'var(--muted)'; outA.textContent = L('Генерация A...', 'Generating A...');
+  outB.style.color = 'var(--muted)'; outB.textContent = L('Генерация B...', 'Generating B...');
   try {
     const res = await api('/api/test/compare', {
       method: 'POST',
       body: JSON.stringify({
         text,
-        author: document.getElementById('test-author').value.trim() || 'Собеседник',
+        author: document.getElementById('test-author').value.trim() || L('Собеседник', 'User'),
         a: {
           scope: document.getElementById('ab-scope-a').value,
           temperature: Number(document.getElementById('ab-temp-a').value),
@@ -10457,7 +10601,7 @@ async function runAbArena() {
       if (v.ok) { el.style.color = 'var(--text)'; el.textContent = `${v.reply}
 
 [${v.model} • t=${v.temperature} • ${v.ms}ms]`; }
-      else { el.style.color = 'var(--red)'; el.textContent = `Ошибка: ${v.error || 'пусто'} (${v.ms}ms)`; }
+      else { el.style.color = 'var(--red)'; el.textContent = L(`Ошибка: ${v.error || 'пусто'} (${v.ms}ms)`, `Error: ${v.error || 'empty'} (${v.ms}ms)`); }
     };
     show(outA, res.a || {});
     show(outB, res.b || {});
@@ -10501,7 +10645,7 @@ function renderDiagnostics() {
   document.getElementById('diag-count').textContent = String(allDiagnostics.length);
   const box = document.getElementById('diag-box');
   if (!allDiagnostics.length) {
-    box.innerHTML = renderEmptyState({ icon: 'shield', title: 'Пропусков не зафиксировано', desc: 'Когда бот промолчит из-за кулдауна, белого списка или GPU Guard, причина появится здесь.', compact: true });
+    box.innerHTML = renderEmptyState({ icon: 'shield', title: L('Пропусков не зафиксировано', 'No skipped messages yet'), desc: L('Когда бот промолчит из-за кулдауна, белого списка или GPU Guard, причина появится здесь.', 'Whenever the bot stays silent due to cooldown, whitelist, or GPU Guard, the reason appears here.'), compact: true });
     return;
   }
   box.innerHTML = allDiagnostics.slice().reverse().map(d => `
@@ -10524,12 +10668,12 @@ function setLogFilter(level, btn) {
 
 function toggleAutoScroll() {
   autoScroll = !autoScroll;
-  document.getElementById('btn-autoscroll').textContent = 'Автоскролл: ' + (autoScroll ? 'ВКЛ' : 'ВЫКЛ');
+  document.getElementById('btn-autoscroll').textContent = L('Автоскролл: ', 'Autoscroll: ') + (autoScroll ? L('ВКЛ', 'ON') : L('ВЫКЛ', 'OFF'));
 }
 
 async function copyLogs() {
   const txt = allLogs.filter(logMatches).map(r => `${r.ts} [${r.level}] ${r.msg}`).join('\n');
-  try { await navigator.clipboard.writeText(txt); toast('Логи скопированы'); } catch (e) { toast('Ошибка копирования', true); }
+  try { await navigator.clipboard.writeText(txt); toast(L('Логи скопированы', 'Logs copied')); } catch (e) { toast(L('Ошибка копирования', 'Copy failed'), true); }
 }
 
 async function clearLogs() { await api('/api/logs/clear', { method: 'POST' }); }
@@ -10542,22 +10686,22 @@ async function connectFromBanner() {
   const inp = document.getElementById('banner-token-input');
   const save = document.getElementById('banner-save-chk').checked;
   const res = await api('/api/discord/connect', { method: 'POST', body: JSON.stringify({ token: inp.value.trim(), save }) });
-  if (res.ok) { inp.value = ''; toast('Подключаюсь к Discord...'); } else toast(res.message || res.error || 'Ошибка токена', true);
+  if (res.ok) { inp.value = ''; toast(L('Подключаюсь к Discord...', 'Connecting to Discord...')); } else toast(res.message || res.error || L('Ошибка токена', 'Invalid token'), true);
 }
 
 async function connectFromSettings() {
   const inp = document.getElementById('set-discord-token');
   const res = await api('/api/discord/connect', { method: 'POST', body: JSON.stringify({ token: inp.value.trim(), save: true }) });
-  if (res.ok) { inp.value = ''; toast('Подключаюсь к Discord...'); } else toast(res.message || res.error || 'Вставь токен', true);
+  if (res.ok) { inp.value = ''; toast(L('Подключаюсь к Discord...', 'Connecting to Discord...')); } else toast(res.message || res.error || L('Вставь токен', 'Paste token'), true);
 }
 
-async function disconnectDiscord() { await api('/api/discord/disconnect', { method: 'POST' }); toast('Отключено от Discord'); }
-async function forgetToken() { if (!(await uiConfirm({ title: 'Удалить токен Discord?', message: 'Сохранённый токен будет удалён из локальной базы, а бот отключится от Discord.', confirmText: 'Удалить токен', danger: true }))) return; await api('/api/discord/forget', { method: 'POST' }); toast('Токен удалён'); }
+async function disconnectDiscord() { await api('/api/discord/disconnect', { method: 'POST' }); toast(L('Отключено от Discord', 'Disconnected from Discord')); }
+async function forgetToken() { if (!(await uiConfirm({ title: L('Удалить токен Discord?', 'Delete Discord token?'), message: L('Сохранённый токен будет удалён из локальной базы, а бот отключится от Discord.', 'Saved token will be removed from local storage and the bot will disconnect.'), confirmText: L('Удалить токен', 'Delete Token'), danger: true }))) return; await api('/api/discord/forget', { method: 'POST' }); toast(L('Токен удалён', 'Token deleted')); }
 
 function populateModelsSelect(models) {
   const sel = document.getElementById('sel-models');
   const prev = sel.value;
-  sel.innerHTML = '<option value="">Модели LM Studio...</option>';
+  sel.innerHTML = `<option value="">${L('Модели LM Studio...', 'LM Studio models...')}</option>`;
   for (const m of (models || [])) {
     const opt = document.createElement('option'); opt.value = m; opt.textContent = m; sel.appendChild(opt);
   }
@@ -10567,18 +10711,18 @@ function populateModelsSelect(models) {
 async function toggleMaster() { if (state) await pushControl({ active: !state.bot.active }); }
 async function pushControl(payload) {
   const res = await api('/api/control', { method: 'POST', body: JSON.stringify(payload) });
-  if (!res.ok) { toast(res.error || 'Ошибка', true); return; }
-  toast('Применено');
+  if (!res.ok) { toast(res.error || L('Ошибка', 'Error'), true); return; }
+  toast(L('Применено', 'Applied'));
 }
 
 async function pingLLM() {
-  toast('Проверяю LM Studio...');
+  toast(L('Проверяю LM Studio...', 'Checking LM Studio...'));
   const res = await api('/api/ping', { method: 'POST' });
   populateModelsSelect(res.models);
-  toast(res.online ? `LLM онлайн (${res.ms}ms • ${res.active_model})` : 'LLM сервер не отвечает!', !res.online);
+  toast(res.online ? L(`LLM онлайн (${res.ms}ms • ${res.active_model})`, `LLM Online (${res.ms}ms • ${res.active_model})`) : L('LLM сервер не отвечает!', 'LLM server is not responding!'), !res.online);
 }
 
-async function clearCache() { const res = await api('/api/cache/clear', { method: 'POST' }); if (res.ok) toast(`Кэш очищен (${res.cleared})`); }
+async function clearCache() { const res = await api('/api/cache/clear', { method: 'POST' }); if (res.ok) toast(L(`Кэш очищен (${res.cleared})`, `Cache cleared (${res.cleared})`)); }
 
 async function savePersona(scope, reset) {
   const ta = document.getElementById('txt-persona-' + scope);
@@ -10587,26 +10731,30 @@ async function savePersona(scope, reset) {
     ta.dataset.dirty = '0'; ta.value = res.prompt;
     document.getElementById('dirty-' + scope).classList.remove('show');
     refreshDirtyBar();
-    toast(reset ? 'Роль сброшена' : 'Роль сохранена');
-  } else toast(res.error || 'Ошибка', true);
+    toast(reset ? L('Роль сброшена', 'Role reset') : L('Роль сохранена', 'Role saved'));
+  } else toast(res.error || L('Ошибка', 'Error'), true);
 }
 
 function renderPresets(builtin, custom) {
   const grid = document.getElementById('presets-grid');
   const all = [...builtin.map(p => ({...p, isCustom: false})), ...custom.map(p => ({...p, isCustom: true}))];
-  grid.innerHTML = all.map((p, idx) => `
+  grid.innerHTML = all.map((p, idx) => {
+    const enMeta = (!p.isCustom && uiLang === 'en' && BUILTIN_PRESET_EN[p.id]) ? BUILTIN_PRESET_EN[p.id] : null;
+    const pName = enMeta ? enMeta.name : p.name;
+    const pTag = enMeta ? enMeta.tag : (p.tag || L('Роль', 'Role'));
+    return `
     <div class="preset-card">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
-        <b>${esc(p.name)}</b>
-        <span class="badge ${p.isCustom ? 'badge-warn' : 'badge-cyan'}">${esc(p.tag || 'Роль')}</span>
+        <b>${esc(pName)}</b>
+        <span class="badge ${p.isCustom ? 'badge-warn' : 'badge-cyan'}">${esc(pTag)}</span>
       </div>
       <div class="row-inline" style="gap:5px">
-        <button class="btn btn-sm" onclick="applyPreset(${idx}, 'srv')">В Сервер</button>
-        <button class="btn btn-sm" onclick="applyPreset(${idx}, 'dm')">В ЛС</button>
+        <button class="btn btn-sm" onclick="applyPreset(${idx}, 'srv')">${L('В Сервер', 'To Server')}</button>
+        <button class="btn btn-sm" onclick="applyPreset(${idx}, 'dm')">${L('В ЛС', 'To DM')}</button>
         ${p.isCustom ? `<button class="btn btn-sm btn-danger no-grow" onclick="deletePreset('${esc(p.id)}')">✕</button>` : ''}
       </div>
     </div>
-  `).join('');
+  `; }).join('');
   window._allPresetsCache = all;
 }
 
@@ -10623,25 +10771,25 @@ function togglePresetCreator() {
 
 async function saveNewPreset() {
   const name = document.getElementById('new-preset-name').value.trim();
-  const tag = document.getElementById('new-preset-tag').value.trim() || 'Свой';
+  const tag = document.getElementById('new-preset-tag').value.trim() || L('Свой', 'Custom');
   const src = document.getElementById('new-preset-source').value;
   const prompt = document.getElementById('txt-persona-' + src).value.trim();
   const res = await api('/api/presets', { method: 'POST', body: JSON.stringify({ name, tag, prompt }) });
   if (res.ok) {
     document.getElementById('new-preset-name').value = '';
     document.getElementById('preset-creator').style.display = 'none';
-    toast('Пресет сохранён');
-  } else toast(res.error || 'Ошибка', true);
+    toast(L('Пресет сохранён', 'Preset saved'));
+  } else toast(res.error || L('Ошибка', 'Error'), true);
 }
 
-async function deletePreset(id) { await api('/api/presets/' + encodeURIComponent(id), { method: 'DELETE' }); toast('Пресет удалён'); }
+async function deletePreset(id) { await api('/api/presets/' + encodeURIComponent(id), { method: 'DELETE' }); toast(L('Пресет удалён', 'Preset deleted')); }
 
 async function loadOverrides() {
   const res = await api('/api/overrides');
   const list = res.overrides || [];
   const box = document.getElementById('overrides-list');
-  if (!list.length) { box.innerHTML = '<div style="color:var(--muted);font-size:12.3px;padding:8px">Индивидуальных ролей пока нет.</div>'; return; }
-  const mapLabel = { user: 'Человек', channel: 'Канал', guild: 'Сервер' };
+  if (!list.length) { box.innerHTML = `<div style="color:var(--muted);font-size:12.3px;padding:8px">${L('Индивидуальных ролей пока нет.', 'No custom overrides yet.')}</div>`; return; }
+  const mapLabel = { user: L('Человек', 'User'), channel: L('Канал', 'Channel'), guild: L('Сервер', 'Server') };
   box.innerHTML = list.map(o => `
     <div class="chip-item" style="align-items:flex-start">
       <div style="min-width:0">
@@ -10649,7 +10797,7 @@ async function loadOverrides() {
         <small>ID: ${esc(o.target_id)}</small>
         <div style="font-size:12px;color:var(--muted);margin-top:4px;white-space:pre-wrap">${esc(o.prompt.slice(0, 140))}${o.prompt.length > 140 ? '…' : ''}</div>
       </div>
-      <button class="btn btn-sm btn-danger no-grow" onclick="deleteOverride('${esc(o.scope_type)}','${esc(o.target_id)}')">Удалить</button>
+      <button class="btn btn-sm btn-danger no-grow" onclick="deleteOverride('${esc(o.scope_type)}','${esc(o.target_id)}')">${L('Удалить', 'Delete')}</button>
     </div>
   `).join('');
 }
@@ -10665,14 +10813,14 @@ async function saveOverride() {
     document.getElementById('ovr-label').value = '';
     document.getElementById('ovr-prompt').value = '';
     await loadOverrides();
-    toast('Роль сохранена');
-  } else toast(res.error || 'Ошибка', true);
+    toast(L('Роль сохранена', 'Override saved'));
+  } else toast(res.error || L('Ошибка', 'Error'), true);
 }
 
 async function deleteOverride(scope, tid) {
   await api(`/api/overrides/${encodeURIComponent(scope)}/${encodeURIComponent(tid)}`, { method: 'DELETE' });
   await loadOverrides();
-  toast('Роль удалена');
+  toast(L('Роль удалена', 'Override deleted'));
 }
 
 // ============================================================================
@@ -10680,15 +10828,15 @@ async function deleteOverride(scope, tid) {
 // ============================================================================
 function attachImageFile(file) {
   if (!file) return;
-  if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) { toast('Поддерживаются PNG, JPG, WEBP, GIF', true); return; }
-  if (file.size > 6 * 1024 * 1024) { toast('Файл больше 6 МБ', true); return; }
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) { toast(L('Поддерживаются PNG, JPG, WEBP, GIF', 'Only PNG, JPG, WEBP, GIF supported'), true); return; }
+  if (file.size > 6 * 1024 * 1024) { toast(L('Файл больше 6 МБ', 'File exceeds 6 MB'), true); return; }
   const reader = new FileReader();
   reader.onload = () => {
     const val = String(reader.result || '');
     if (!val.startsWith('data:image/')) return;
     testImageDataUri = val;
     document.getElementById('img-preview-thumb').src = val;
-    document.getElementById('img-preview-name').textContent = file.name || 'Скриншот';
+    document.getElementById('img-preview-name').textContent = file.name || L('Скриншот', 'Screenshot');
     document.getElementById('img-preview-bar').classList.add('show');
   };
   reader.readAsDataURL(file);
@@ -10699,7 +10847,7 @@ function clearTestImage() { testImageDataUri = null; document.getElementById('te
 document.addEventListener('paste', (ev) => {
   if (!document.getElementById('tab-personas').classList.contains('active')) return;
   for (const item of (ev.clipboardData?.items || [])) {
-    if (item.type?.startsWith('image/')) { const f = item.getAsFile(); if (f) { attachImageFile(f); toast('Картинка вставлена'); break; } }
+    if (item.type?.startsWith('image/')) { const f = item.getAsFile(); if (f) { attachImageFile(f); toast(L('Картинка вставлена', 'Image pasted')); break; } }
   }
 });
 
@@ -10710,10 +10858,10 @@ chatBoxEl.addEventListener('drop', (e) => { e.preventDefault(); chatBoxEl.classL
 
 async function sendTest() {
   const inp = document.getElementById('test-input');
-  const text = inp.value.trim() || (testImageDataUri ? 'что на картинке?' : '');
+  const text = inp.value.trim() || (testImageDataUri ? L('что на картинке?', 'what is in this image?') : '');
   if (!text) return;
   const scope = document.getElementById('test-scope').value;
-  const author = document.getElementById('test-author').value.trim() || 'Собеседник';
+  const author = document.getElementById('test-author').value.trim() || L('Собеседник', 'User');
   const imgUri = testImageDataUri;
   const box = document.getElementById('chat-box');
   inp.value = ''; clearTestImage();
@@ -10722,11 +10870,11 @@ async function sendTest() {
   uBubble.className = 'msg-bubble msg-user';
   uBubble.textContent = text;
   if (imgUri) { const im = document.createElement('img'); im.className = 'msg-img'; im.src = imgUri; uBubble.appendChild(im); }
-  const uMeta = document.createElement('div'); uMeta.className = 'msg-meta'; uMeta.textContent = `${author} (${scope === 'dm' ? 'ЛС' : 'Сервер'})`;
+  const uMeta = document.createElement('div'); uMeta.className = 'msg-meta'; uMeta.textContent = `${author} (${scope === 'dm' ? L('ЛС', 'DM') : L('Сервер', 'Server')})`;
   uBubble.appendChild(uMeta); box.appendChild(uBubble);
 
   const botBubble = document.createElement('div');
-  botBubble.className = 'msg-bubble msg-bot'; botBubble.style.color = 'var(--muted)'; botBubble.textContent = 'Печатает...';
+  botBubble.className = 'msg-bubble msg-bot'; botBubble.style.color = 'var(--muted)'; botBubble.textContent = L('Печатает...', 'Typing...');
   box.appendChild(botBubble); box.scrollTop = box.scrollHeight;
 
   const btn = document.getElementById('btn-send-test'); btn.disabled = true;
@@ -10734,7 +10882,7 @@ async function sendTest() {
     const res = await api('/api/test', { method: 'POST', body: JSON.stringify({ text, scope, author, image_data_uri: imgUri }) });
     if (res.ok) {
       botBubble.style.color = '';
-      botBubble.textContent = res.reply || '(медиа-ответ)';
+      botBubble.textContent = res.reply || L('(медиа-ответ)', '(media reply)');
       if (res.meme_file) {
         const im = document.createElement('img'); im.className = 'msg-img';
         im.src = '/api/memes/file/' + encodeURIComponent(res.meme_file);
@@ -10752,14 +10900,14 @@ async function sendTest() {
       const meta = document.createElement('div'); meta.className = 'msg-meta';
       let extra = `${res.ms}ms`;
       if (res.vision_used) extra += ' • Vision';
-      if (res.affinity_delta) extra += ` • Симпатия: ${res.affinity_delta > 0 ? '+' : ''}${res.affinity_delta}`;
-      if (res.mood) extra += ` • Настроение: ${res.mood}`;
-      if (res.meme_file) extra += ` • Мем: ${res.meme_file}`;
+      if (res.affinity_delta) extra += ` • ${L('Симпатия', 'Affinity')}: ${res.affinity_delta > 0 ? '+' : ''}${res.affinity_delta}`;
+      if (res.mood) extra += ` • ${L('Настроение', 'Mood')}: ${res.mood}`;
+      if (res.meme_file) extra += ` • ${L('Мем', 'Meme')}: ${res.meme_file}`;
       if (res.gif_query) extra += ` • GIF: ${res.gif_query}`;
       meta.textContent = extra; botBubble.appendChild(meta);
     } else {
       botBubble.style.color = 'var(--red)';
-      botBubble.textContent = `Пустой ответ (${res.ms ?? 0}ms): ${res.error || 'проверь модель'}`;
+      botBubble.textContent = L(`Пустой ответ (${res.ms ?? 0}ms): ${res.error || 'проверь модель'}`, `Empty reply (${res.ms ?? 0}ms): ${res.error || 'check model'}`);
     }
   } finally { btn.disabled = false; box.scrollTop = box.scrollHeight; }
 }
@@ -10769,11 +10917,11 @@ async function sendTest() {
 // ============================================================================
 function renderWhitelist(channels) {
   const box = document.getElementById('whitelist-box');
-  if (!channels?.length) { box.innerHTML = '<div style="color:var(--muted);font-size:12.3px;padding:6px">Список пуст — бот работает во всех каналах.</div>'; return; }
+  if (!channels?.length) { box.innerHTML = `<div style="color:var(--muted);font-size:12.3px;padding:6px">${L('Список пуст — бот работает во всех каналах.', 'List is empty — bot listens to all channels.')}</div>`; return; }
   box.innerHTML = channels.map(ch => `
     <div class="chip-item">
       <div><b>${esc(ch.name)}</b><small>${esc(ch.guild)} • ${esc(ch.id)}</small></div>
-      <button class="btn btn-sm btn-danger" onclick="removeChannel('${esc(ch.id)}')">Убрать</button>
+      <button class="btn btn-sm btn-danger" onclick="removeChannel('${esc(ch.id)}')">${L('Убрать', 'Remove')}</button>
     </div>
   `).join('');
 }
@@ -10783,40 +10931,40 @@ function renderAvailableChannels() {
   const q = document.getElementById('inp-channel-filter').value.trim().toLowerCase();
   const sel = document.getElementById('sel-avail-channels');
   const filtered = availChannelsCache.filter(ch => !q || ch.guild.toLowerCase().includes(q) || ch.name.toLowerCase().includes(q) || ch.id.includes(q));
-  sel.innerHTML = `<option value="">Найдено: ${filtered.length}...</option>`;
+  sel.innerHTML = `<option value="">${L('Найдено', 'Found')}: ${filtered.length}...</option>`;
   for (const ch of filtered.slice(0, 250)) { const opt = document.createElement('option'); opt.value = ch.id; opt.textContent = `${ch.guild} — ${ch.name}`; sel.appendChild(opt); }
 }
-async function addChannelById() { const inp = document.getElementById('inp-channel-id'); if (!inp.value.trim()) return; const r = await api('/api/channels', { method: 'POST', body: JSON.stringify({ action: 'add', channel_id: inp.value.trim() }) }); if (r.ok) { inp.value = ''; toast('Канал добавлен'); } else toast(r.error || 'Ошибка', true); }
-async function addSelectedChannel() { const id = document.getElementById('sel-avail-channels').value; if (!id) return; await api('/api/channels', { method: 'POST', body: JSON.stringify({ action: 'add', channel_id: id }) }); toast('Канал добавлен'); }
-async function removeChannel(id) { await api('/api/channels', { method: 'POST', body: JSON.stringify({ action: 'remove', channel_id: id }) }); toast('Канал убран'); }
-async function clearWhitelist() { if (!(await uiConfirm({ title: 'Сбросить белый список каналов?', message: 'После очистки бот начнёт слушать все доступные серверные каналы.', confirmText: 'Слушать все', danger: false }))) return; await api('/api/channels', { method: 'POST', body: JSON.stringify({ action: 'clear' }) }); toast('Белый список очищен'); }
+async function addChannelById() { const inp = document.getElementById('inp-channel-id'); if (!inp.value.trim()) return; const r = await api('/api/channels', { method: 'POST', body: JSON.stringify({ action: 'add', channel_id: inp.value.trim() }) }); if (r.ok) { inp.value = ''; toast(L('Канал добавлен', 'Channel added')); } else toast(r.error || L('Ошибка', 'Error'), true); }
+async function addSelectedChannel() { const id = document.getElementById('sel-avail-channels').value; if (!id) return; await api('/api/channels', { method: 'POST', body: JSON.stringify({ action: 'add', channel_id: id }) }); toast(L('Канал добавлен', 'Channel added')); }
+async function removeChannel(id) { await api('/api/channels', { method: 'POST', body: JSON.stringify({ action: 'remove', channel_id: id }) }); toast(L('Канал убран', 'Channel removed')); }
+async function clearWhitelist() { if (!(await uiConfirm({ title: L('Сбросить белый список каналов?', 'Clear channel whitelist?'), message: L('После очистки бот начнёт слушать все доступные серверные каналы.', 'After clearing, the bot will listen to all accessible server channels.'), confirmText: L('Слушать все', 'Listen All'), danger: false }))) return; await api('/api/channels', { method: 'POST', body: JSON.stringify({ action: 'clear' }) }); toast(L('Белый список очищен', 'Whitelist cleared')); }
 
 async function saveFilters() {
   const bl = document.getElementById('inp-blacklist').value.split(',').map(s => s.trim()).filter(Boolean);
   const tw = document.getElementById('inp-triggers').value.split(',').map(s => s.trim()).filter(Boolean);
   const res = await api('/api/filters', { method: 'POST', body: JSON.stringify({ blacklist: bl, trigger_words: tw }) });
-  if (res.ok) { clearDirtyFlags(['inp-blacklist', 'inp-triggers']); toast('Фильтры сохранены'); } else toast(res.error || 'Ошибка', true);
+  if (res.ok) { clearDirtyFlags(['inp-blacklist', 'inp-triggers']); toast(L('Фильтры сохранены', 'Filters saved')); } else toast(res.error || L('Ошибка', 'Error'), true);
 }
 
 async function clearMemory() {
   const cid = document.getElementById('inp-clear-ch').value.trim();
-  const scopeMsg = cid ? `Вся история диалогов в канале ${cid} будет безвозвратно удалена.` : 'Вся история диалогов по ВСЕМ каналам и ЛС будет безвозвратно удалена.';
-  if (!(await uiConfirm({ title: cid ? 'Очистить память канала?' : 'Очистить всю память бота?', message: scopeMsg, confirmText: 'Очистить', danger: true }))) return;
+  const scopeMsg = cid ? L(`Вся история диалогов в канале ${cid} будет безвозвратно удалена.`, `All conversation history in channel ${cid} will be permanently deleted.`) : L('Вся история диалогов по ВСЕМ каналам и ЛС будет безвозвратно удалена.', 'All conversation history across ALL channels and DMs will be permanently deleted.');
+  if (!(await uiConfirm({ title: cid ? L('Очистить память канала?', 'Clear channel memory?') : L('Очистить всю память бота?', 'Clear all bot memory?'), message: scopeMsg, confirmText: L('Очистить', 'Clear'), danger: true }))) return;
   const res = await api('/api/memory/clear', { method: 'POST', body: JSON.stringify({ channel_id: cid }) });
-  toast(`Память очищена (удалено: ${res.deleted})`);
+  toast(L(`Память очищена (удалено: ${res.deleted})`, `Memory cleared (deleted: ${res.deleted})`));
   loadMemoryThreads();
 }
 
 async function compactMemory() {
   const btn = document.getElementById('btn-compact-mem');
-  btn.disabled = true; btn.textContent = 'Сжимаю...';
+  btn.disabled = true; btn.textContent = L('Сжимаю...', 'Compacting...');
   try {
     const res = await api('/api/memory/compact', { method: 'POST' });
     if (res.ok) {
-      toast(res.compacted > 0 ? `Сжато ${res.compacted} сообщ. в ${res.threads} ветках` : 'Пока нет веток для сжатия');
+      toast(res.compacted > 0 ? L(`Сжато ${res.compacted} сообщ. в ${res.threads} ветках`, `Compacted ${res.compacted} msgs in ${res.threads} threads`) : L('Пока нет веток для сжатия', 'No threads need compaction yet'));
       loadMemoryThreads();
-    } else toast(res.error || 'Ошибка сжатия', true);
-  } finally { btn.disabled = false; btn.textContent = 'Сжать старую'; }
+    } else toast(res.error || L('Ошибка сжатия', 'Compaction error'), true);
+  } finally { btn.disabled = false; btn.textContent = L('Сжать старую', 'Compact Old'); }
 }
 
 async function loadUserEvents() {
@@ -10824,11 +10972,11 @@ async function loadUserEvents() {
   const list = res.events || [];
   document.getElementById('ev-count-badge').textContent = String(list.length);
   const box = document.getElementById('user-events-list');
-  if (!list.length) { box.innerHTML = renderEmptyState({ icon: 'calendar', title: 'Личных событий пока нет', desc: 'Бот сам запоминает фразы вроде «у меня др 15 мая» или «завтра экзамен».', actionText: 'Добавить вручную', actionOnclick: "document.getElementById('ev-inp-uid').focus()", compact: true }); return; }
+  if (!list.length) { box.innerHTML = renderEmptyState({ icon: 'calendar', title: L('Личных событий пока нет', 'No personal events yet'), desc: L('Бот сам запоминает фразы вроде «у меня др 15 мая» или «завтра экзамен».', 'The bot auto-remembers phrases like "my birthday is May 15" or "exam tomorrow".'), actionText: L('Добавить вручную', 'Add Manually'), actionOnclick: "document.getElementById('ev-inp-uid').focus()", compact: true }); return; }
   box.innerHTML = list.map(e => `
     <div class="chip-item">
       <div style="min-width:0">
-        <b>${String(e.day).padStart(2,'0')}.${String(e.month).padStart(2,'0')}</b> — ${esc(e.title)} ${e.recurring ? '<span class="badge badge-dm">ежегодн.</span>' : ''}
+        <b>${String(e.day).padStart(2,'0')}.${String(e.month).padStart(2,'0')}</b> — ${esc(e.title)} ${e.recurring ? `<span class="badge badge-dm">${L('ежегодн.', 'yearly')}</span>` : ''}
         <small>${esc(e.username)} (ID: ${esc(e.user_id)})</small>
       </div>
       <button class="btn btn-sm btn-danger no-grow" onclick="deleteUserEvent(${e.id})">✕</button>
@@ -10847,13 +10995,13 @@ async function addUserEventManual() {
       recurring: document.getElementById('ev-chk-rec').checked,
     }),
   });
-  if (res.ok) { document.getElementById('ev-inp-title').value = ''; toast('Событие сохранено'); loadUserEvents(); }
-  else toast(res.error || 'Ошибка', true);
+  if (res.ok) { document.getElementById('ev-inp-title').value = ''; toast(L('Событие сохранено', 'Event saved')); loadUserEvents(); }
+  else toast(res.error || L('Ошибка', 'Error'), true);
 }
 
 async function deleteUserEvent(id) {
   await api('/api/events-calendar/' + id, { method: 'DELETE' });
-  toast('Событие удалено');
+  toast(L('Событие удалено', 'Event deleted'));
   loadUserEvents();
 }
 
@@ -10862,11 +11010,11 @@ async function loadReminders() {
   const list = res.reminders || [];
   document.getElementById('rem-count-badge').textContent = String(list.length);
   const box = document.getElementById('reminders-list');
-  if (!list.length) { box.innerHTML = renderEmptyState({ icon: 'clock', title: 'Активных напоминаний нет', desc: 'В чате можно написать «напомни через 15 минут про катку» или создать таймер выше.', actionText: 'Создать таймер', actionOnclick: "document.getElementById('rem-inp-txt').focus()", compact: true }); return; }
+  if (!list.length) { box.innerHTML = renderEmptyState({ icon: 'clock', title: L('Активных напоминаний нет', 'No active reminders'), desc: L('В чате можно написать «напомни через 15 минут про катку» или создать таймер выше.', 'Users can type "remind me in 15 min" in chat, or create a timer above.'), actionText: L('Создать таймер', 'Create Timer'), actionOnclick: "document.getElementById('rem-inp-txt').focus()", compact: true }); return; }
   box.innerHTML = list.map(r => `
     <div class="chip-item">
       <div style="min-width:0">
-        <b>${esc(new Date(r.due_at * 1000).toLocaleString('ru-RU'))}</b> — ${esc(r.text)}
+        <b>${esc(new Date(r.due_at * 1000).toLocaleString(uiLocale()))}</b> — ${esc(r.text)}
         <small>${esc(r.username)} • ${esc(r.channel_name || r.channel_id)}</small>
       </div>
       <button class="btn btn-sm btn-danger no-grow" onclick="deleteReminder(${r.id})">✕</button>
@@ -10879,13 +11027,13 @@ async function addReminderManual() {
   const mins = Number(document.getElementById('rem-inp-min').value) || 15;
   const txt = document.getElementById('rem-inp-txt').value.trim();
   const res = await api('/api/reminders', { method: 'POST', body: JSON.stringify({ channel_id: cid, minutes: mins, text: txt }) });
-  if (res.ok) { document.getElementById('rem-inp-txt').value = ''; toast('Напоминание добавлено'); loadReminders(); }
-  else toast(res.error || 'Ошибка', true);
+  if (res.ok) { document.getElementById('rem-inp-txt').value = ''; toast(L('Напоминание добавлено', 'Reminder added')); loadReminders(); }
+  else toast(res.error || L('Ошибка', 'Error'), true);
 }
 
 async function deleteReminder(id) {
   await api('/api/reminders/' + id, { method: 'DELETE' });
-  toast('Напоминание удалено');
+  toast(L('Напоминание удалено', 'Reminder deleted'));
   loadReminders();
 }
 
@@ -10896,25 +11044,25 @@ async function runLongMemorySearch() {
   const res = await api('/api/memory/search?q=' + encodeURIComponent(q));
   const list = res.results || [];
   if (!list.length) {
-    box.innerHTML = '<div style="color:var(--muted);font-size:12.3px;padding:6px">Ничего не найдено.</div>';
+    box.innerHTML = `<div style="color:var(--muted);font-size:12.3px;padding:6px">${L('Ничего не найдено.', 'Nothing found.')}</div>`;
     return;
   }
   box.innerHTML = list.map(m => `
     <div class="mem-msg-row ${m.role === 'assistant' ? 'bot' : 'usr'}">
       <div style="min-width:0;font-size:12.3px;white-space:pre-wrap;word-break:break-word">
         <div style="font-size:11px;color:var(--muted);margin-bottom:2px">
-          <b>${m.role === 'assistant' ? 'Бот' : 'Участник'}</b> • ${esc(m.channel_name || m.channel_id)} • ${esc(new Date(m.created_at * 1000).toLocaleString('ru-RU'))}
+          <b>${m.role === 'assistant' ? L('Бот', 'Bot') : L('Участник', 'User')}</b> • ${esc(m.channel_name || m.channel_id)} • ${esc(new Date(m.created_at * 1000).toLocaleString(uiLocale()))}
         </div>
         ${esc(m.content)}
       </div>
-      <button class="btn btn-sm btn-danger no-grow" onclick="deleteFtsMessage(${m.id})" title="Удалить">✕</button>
+      <button class="btn btn-sm btn-danger no-grow" onclick="deleteFtsMessage(${m.id})" title="${L('Удалить', 'Delete')}">✕</button>
     </div>
   `).join('');
 }
 
 async function deleteFtsMessage(msgId) {
   const res = await api('/api/memory/message/' + msgId, { method: 'DELETE' });
-  if (res.ok) { toast('Удалено из памяти'); runLongMemorySearch(); loadMemoryThreads(); }
+  if (res.ok) { toast(L('Удалено из памяти', 'Deleted from memory')); runLongMemorySearch(); loadMemoryThreads(); }
 }
 
 async function loadMemoryThreads() {
@@ -10927,7 +11075,7 @@ function renderMemoryThreads() {
   const q = document.getElementById('mem-thread-search').value.trim().toLowerCase();
   const box = document.getElementById('mem-threads-list');
   const list = memoryThreadsCache.filter(t => !q || t.username.toLowerCase().includes(q) || t.channel_name.toLowerCase().includes(q) || t.user_id.includes(q));
-  if (!list.length) { box.innerHTML = renderEmptyState({ icon: 'activity', title: q ? 'Ветки не найдены' : 'История памяти пуста', desc: q ? 'Попробуй другой поисковый запрос.' : 'Диалоги появятся здесь автоматически после первых ответов бота.', compact: true }); return; }
+  if (!list.length) { box.innerHTML = renderEmptyState({ icon: 'activity', title: q ? L('Ветки не найдены', 'No matching threads') : L('История памяти пуста', 'Memory history is empty'), desc: q ? L('Попробуй другой поисковый запрос.', 'Try a different search query.') : L('Диалоги появятся здесь автоматически после первых ответов бота.', 'Threads will appear here automatically after the bot replies.'), compact: true }); return; }
   box.innerHTML = list.map(t => {
     const sel = selectedThread && selectedThread.channel_id === t.channel_id && selectedThread.user_id === t.user_id;
     return `
@@ -10950,14 +11098,14 @@ async function openMemoryThread(cid, uid, username, chName) {
   const res = await api(`/api/memory/messages?channel_id=${encodeURIComponent(cid)}&user_id=${encodeURIComponent(uid)}`);
   const box = document.getElementById('mem-messages-list');
   const msgs = res.messages || [];
-  if (!msgs.length) { box.innerHTML = '<div style="color:var(--muted);font-size:12.3px;padding:8px">Сообщений нет.</div>'; return; }
+  if (!msgs.length) { box.innerHTML = `<div style="color:var(--muted);font-size:12.3px;padding:8px">${L('Сообщений нет.', 'No messages.')}</div>`; return; }
   box.innerHTML = msgs.map(m => `
     <div class="mem-msg-row ${m.role === 'assistant' ? 'bot' : 'usr'}">
       <div style="min-width:0;font-size:12.3px;white-space:pre-wrap;word-break:break-word">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:3px"><b>${m.role === 'assistant' ? 'Бот' : 'Участник'}</b> • ${esc(new Date(m.created_at * 1000).toLocaleTimeString('ru-RU'))}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:3px"><b>${m.role === 'assistant' ? L('Бот', 'Bot') : L('Участник', 'User')}</b> • ${esc(new Date(m.created_at * 1000).toLocaleTimeString(uiLocale()))}</div>
         ${esc(m.content)}
       </div>
-      <button class="btn btn-sm btn-danger no-grow" onclick="deleteMemoryMessage(${m.id})" title="Удалить">✕</button>
+      <button class="btn btn-sm btn-danger no-grow" onclick="deleteMemoryMessage(${m.id})" title="${L('Удалить', 'Delete')}">✕</button>
     </div>
   `).join('');
   box.scrollTop = box.scrollHeight;
@@ -10966,7 +11114,7 @@ async function openMemoryThread(cid, uid, username, chName) {
 async function deleteMemoryMessage(msgId) {
   const res = await api('/api/memory/message/' + msgId, { method: 'DELETE' });
   if (res.ok && selectedThread) {
-    toast('Реплика удалена');
+    toast(L('Реплика удалена', 'Message deleted'));
     openMemoryThread(selectedThread.channel_id, selectedThread.user_id, selectedThread.username, selectedThread.chName);
     loadMemoryThreads();
   }
@@ -10974,12 +11122,12 @@ async function deleteMemoryMessage(msgId) {
 
 async function clearSelectedThread() {
   if (!selectedThread) return;
-  if (!(await uiConfirm({ title: 'Очистить историю диалога?', message: `Все сохранённые сообщения с ${selectedThread.username} в этом канале будут удалены.`, confirmText: 'Очистить ветку', danger: true }))) return;
+  if (!(await uiConfirm({ title: L('Очистить историю диалога?', 'Clear conversation history?'), message: L(`Все сохранённые сообщения с ${selectedThread.username} в этом канале будут удалены.`, `All saved messages with ${selectedThread.username} in this channel will be deleted.`), confirmText: L('Очистить ветку', 'Clear Thread'), danger: true }))) return;
   await api('/api/memory/clear', { method: 'POST', body: JSON.stringify({ channel_id: selectedThread.channel_id, user_id: selectedThread.user_id }) });
   document.getElementById('mem-messages-list').innerHTML = '';
   document.getElementById('btn-clear-thread').style.display = 'none';
   selectedThread = null;
-  toast('Диалог очищен');
+  toast(L('Диалог очищен', 'Thread cleared'));
   loadMemoryThreads();
 }
 
@@ -10989,11 +11137,11 @@ async function clearSelectedThread() {
 async function loadDossiers() { const res = await api('/api/dossiers'); dossiersCache = res.dossiers || []; renderDossiers(); }
 function affTierShort(val) {
   const n = Number(val) || 0;
-  if (n <= -7) return 'сильная обида';
-  if (n <= -3) return 'прохладно';
-  if (n <= 2) return 'нейтрально';
-  if (n <= 6) return 'симпатия';
-  return 'любимчик';
+  if (n <= -7) return L('сильная обида', 'very upset');
+  if (n <= -3) return L('прохладно', 'cool');
+  if (n <= 2) return L('нейтрально', 'neutral');
+  if (n <= 6) return L('симпатия', 'friendly');
+  return L('любимчик', 'favorite');
 }
 function updateDosAffLabel(val) {
   const n = Number(val) || 0;
@@ -11003,7 +11151,7 @@ function renderDossiers() {
   const q = document.getElementById('dossier-search').value.trim().toLowerCase();
   const box = document.getElementById('dossiers-list');
   const list = dossiersCache.filter(d => !q || d.username.toLowerCase().includes(q) || d.user_id.includes(q) || (d.facts || '').toLowerCase().includes(q) || (d.mood || '').toLowerCase().includes(q));
-  if (!list.length) { box.innerHTML = renderEmptyState({ icon: 'user', title: q ? 'Ничего не найдено' : 'Досье пока пусты', desc: q ? 'Попробуй изменить поисковый запрос.' : 'Бот автоматически собирает заметки о собеседниках во время общения.', actionText: q ? 'Сбросить поиск' : 'Создать вручную', actionOnclick: q ? "document.getElementById('dossier-search').value='';renderDossiers()" : "document.getElementById('dos-uid').focus()" }); return; }
+  if (!list.length) { box.innerHTML = renderEmptyState({ icon: 'user', title: q ? L('Ничего не найдено', 'Nothing found') : L('Досье пока пусты', 'No dossiers yet'), desc: q ? L('Попробуй изменить поисковый запрос.', 'Try a different search query.') : L('Бот автоматически собирает заметки о собеседниках во время общения.', 'The bot automatically collects notes about users during conversations.'), actionText: q ? L('Сбросить поиск', 'Clear Search') : L('Создать вручную', 'Create Manually'), actionOnclick: q ? "document.getElementById('dossier-search').value='';renderDossiers()" : "document.getElementById('dos-uid').focus()" }); return; }
   box.innerHTML = list.map(d => {
     const aff = Number(d.affinity ?? 0);
     const cls = aff > 2 ? 'aff-pos' : (aff < -2 ? 'aff-neg' : 'aff-neu');
@@ -11014,8 +11162,8 @@ function renderDossiers() {
         <div class="dossier-head">
           <div><b>${esc(d.username)}</b> <small style="color:var(--muted)">(${esc(d.user_id)}) • ${esc(fmtRelTime(d.updated_at))}</small></div>
           <div class="row-inline no-grow">
-            <button class="btn btn-sm btn-ghost" onclick="editDossier('${esc(d.user_id)}')">Правка</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteDossier('${esc(d.user_id)}')">Удалить</button>
+            <button class="btn btn-sm btn-ghost" onclick="editDossier('${esc(d.user_id)}')">${L('Правка', 'Edit')}</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteDossier('${esc(d.user_id)}')">${L('Удалить', 'Delete')}</button>
           </div>
         </div>
         <div class="aff-row">
@@ -11023,7 +11171,7 @@ function renderDossiers() {
           <div class="aff-bar"><div style="width:${pct}%;background:${barColor}"></div></div>
           ${d.mood ? `<span class="mood-pill">${esc(d.mood)}</span>` : ''}
         </div>
-        <div style="font-size:12.3px;white-space:pre-wrap;opacity:0.88">${d.facts ? esc(d.facts) : '<span style="color:var(--muted)">(факты собираются)</span>'}</div>
+        <div style="font-size:12.3px;white-space:pre-wrap;opacity:0.88">${d.facts ? esc(d.facts) : `<span style="color:var(--muted)">${L('(факты собираются)', '(gathering facts)')}</span>`}</div>
       </div>
     `;
   }).join('');
@@ -11053,9 +11201,9 @@ async function saveDossierForm() {
       mood: document.getElementById('dos-mood').value.trim()
     })
   });
-  if (res.ok) { await loadDossiers(); toast('Досье сохранено'); } else toast(res.error || 'Ошибка', true);
+  if (res.ok) { await loadDossiers(); toast(L('Досье сохранено', 'Dossier saved')); } else toast(res.error || L('Ошибка', 'Error'), true);
 }
-async function deleteDossier(uid) { if (!(await uiConfirm({ title: 'Удалить досье?', message: `Заметки и шкала симпатии для пользователя ${uid} будут удалены.`, confirmText: 'Удалить', danger: true }))) return; await api('/api/dossiers/' + uid, { method: 'DELETE' }); await loadDossiers(); toast('Досье удалено'); }
+async function deleteDossier(uid) { if (!(await uiConfirm({ title: L('Удалить досье?', 'Delete dossier?'), message: L(`Заметки и шкала симпатии для пользователя ${uid} будут удалены.`, `Notes and affinity score for user ${uid} will be deleted.`), confirmText: L('Удалить', 'Delete'), danger: true }))) return; await api('/api/dossiers/' + uid, { method: 'DELETE' }); await loadDossiers(); toast(L('Досье удалено', 'Dossier deleted')); }
 
 // ============================================================================
 // ЛОКАЛЬНЫЕ СОХРАНЁНКИ (memes/)
@@ -11067,10 +11215,10 @@ dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classLis
 
 async function uploadMemeFiles(files) {
   for (const f of Array.from(files || [])) {
-    if (f.size > 8 * 1024 * 1024) { toast(`${f.name}: больше 8 МБ`, true); continue; }
+    if (f.size > 8 * 1024 * 1024) { toast(L(`${f.name}: больше 8 МБ`, `${f.name}: exceeds 8 MB`), true); continue; }
     const dataUri = await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result || '')); r.readAsDataURL(f); });
     const res = await api('/api/memes/upload', { method: 'POST', body: JSON.stringify({ filename: f.name, data_uri: dataUri }) });
-    if (res.ok) toast(`Загружен: ${res.filename}`); else toast(res.error || 'Ошибка загрузки', true);
+    if (res.ok) toast(L(`Загружен: ${res.filename}`, `Uploaded: ${res.filename}`)); else toast(res.error || L('Ошибка загрузки', 'Upload error'), true);
   }
   document.getElementById('meme-file-inp').value = '';
   await loadMemes();
@@ -11082,7 +11230,7 @@ async function loadMemes() {
   if (res.memes_dir) document.getElementById('lbl-memes-dir').textContent = res.memes_dir;
   const grid = document.getElementById('memes-grid');
   if (!memesCache.length) {
-    grid.innerHTML = `<div style="grid-column:1/-1">${renderEmptyState({ icon: 'image', title: 'Папка сохранёнок пуста', desc: 'Перетащи сюда любимые мемы и гифки, чтобы бот отправлял их по тегу [MEME: имя].', actionText: 'Выбрать файлы', actionOnclick: "document.getElementById('meme-file-inp').click()" })}</div>`;
+    grid.innerHTML = `<div style="grid-column:1/-1">${renderEmptyState({ icon: 'image', title: L('Папка сохранёнок пуста', 'Saved memes folder is empty'), desc: L('Перетащи сюда любимые мемы и гифки, чтобы бот отправлял их по тегу [MEME: имя].', 'Drag & drop favorite memes and GIFs here so the bot can send them via [MEME: name].'), actionText: L('Выбрать файлы', 'Choose Files'), actionOnclick: "document.getElementById('meme-file-inp').click()" })}</div>`;
     return;
   }
   grid.innerHTML = memesCache.map((m, i) => {
@@ -11095,10 +11243,10 @@ async function loadMemes() {
         <div class="meme-thumb">${mediaHtml}</div>
         <div class="meme-body">
           <b style="font-size:12.3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(m.filename)}">${esc(m.filename)}</b>
-          <input type="text" id="meme-tags-${i}" value="${esc(m.tags)}" placeholder="Теги..." style="font-size:11.8px;padding:5px 8px" />
-          <input type="text" id="meme-desc-${i}" value="${esc(m.description)}" placeholder="Когда кидать..." style="font-size:11.8px;padding:5px 8px" />
+          <input type="text" id="meme-tags-${i}" value="${esc(m.tags)}" placeholder="${L('Теги...', 'Tags...')}" style="font-size:11.8px;padding:5px 8px" />
+          <input type="text" id="meme-desc-${i}" value="${esc(m.description)}" placeholder="${L('Когда кидать...', 'When to send...')}" style="font-size:11.8px;padding:5px 8px" />
           <div class="row-inline" style="gap:5px">
-            <button class="btn btn-sm btn-primary" onclick="saveMemeMeta(${i}, '${escJsArg(m.filename)}')">Сохранить</button>
+            <button class="btn btn-sm btn-primary" onclick="saveMemeMeta(${i}, '${escJsArg(m.filename)}')">${L('Сохранить', 'Save')}</button>
             ${!m.is_video ? `<button class="btn btn-sm btn-ghost" onclick="describeMemeVision('${escJsArg(m.filename)}', this)">Vision</button>` : ''}
             <button class="btn btn-sm btn-danger no-grow" onclick="deleteMeme('${escJsArg(m.filename)}')">✕</button>
           </div>
@@ -11112,22 +11260,22 @@ async function saveMemeMeta(i, filename) {
   const tags = document.getElementById('meme-tags-' + i).value.trim();
   const description = document.getElementById('meme-desc-' + i).value.trim();
   const res = await api('/api/memes/meta', { method: 'POST', body: JSON.stringify({ filename, tags, description }) });
-  if (res.ok) toast('Теги сохранены'); else toast(res.error || 'Ошибка', true);
+  if (res.ok) toast(L('Теги сохранены', 'Tags saved')); else toast(res.error || L('Ошибка', 'Error'), true);
 }
 
 async function describeMemeVision(filename, btn) {
   btn.disabled = true; btn.textContent = '...';
   try {
     const res = await api('/api/memes/describe', { method: 'POST', body: JSON.stringify({ filename }) });
-    if (res.ok) { toast('Описано через Vision'); await loadMemes(); }
-    else toast(res.error || 'Ошибка Vision', true);
+    if (res.ok) { toast(L('Описано через Vision', 'Described via Vision')); await loadMemes(); }
+    else toast(res.error || L('Ошибка Vision', 'Vision error'), true);
   } finally { btn.disabled = false; btn.textContent = 'Vision'; }
 }
 
 async function deleteMeme(filename) {
-  if (!(await uiConfirm({ title: 'Удалить сохранёнку?', message: `Файл «${filename}» и его теги будут удалены с диска.`, confirmText: 'Удалить файл', danger: true }))) return;
+  if (!(await uiConfirm({ title: L('Удалить сохранёнку?', 'Delete meme file?'), message: L(`Файл «${filename}» и его теги будут удалены с диска.`, `File "${filename}" and its tags will be deleted from disk.`), confirmText: L('Удалить файл', 'Delete File'), danger: true }))) return;
   await api('/api/memes/' + encodeURIComponent(filename), { method: 'DELETE' });
-  toast('Мем удалён');
+  toast(L('Мем удалён', 'Meme deleted'));
   await loadMemes();
 }
 
@@ -11175,24 +11323,24 @@ function renderAnalytics() {
 
   document.getElementById('an-kpis').innerHTML = `
     <div style="background:var(--input);border:1px solid var(--border);border-radius:10px;padding:12px">
-      <div class="kpi-label">Всего сообщений</div>
+      <div class="kpi-label">${L('Всего сообщений', 'Total Messages')}</div>
       <div class="kpi-val">${s.total_msgs}</div>
-      <div class="kpi-sub">${s.user_msgs} от людей + ${s.bot_msgs} от бота</div>
+      <div class="kpi-sub">${L(`${s.user_msgs} от людей + ${s.bot_msgs} от бота`, `${s.user_msgs} from users + ${s.bot_msgs} from bot`)}</div>
     </div>
     <div style="background:var(--input);border:1px solid var(--border);border-radius:10px;padding:12px">
-      <div class="kpi-label">Участников</div>
+      <div class="kpi-label">${L('Участников', 'Participants')}</div>
       <div class="kpi-val">${s.unique_users}</div>
-      <div class="kpi-sub">${analyticsScope === 'servers' ? 'серверные каналы' : 'серверы и ЛС'}</div>
+      <div class="kpi-sub">${analyticsScope === 'servers' ? L('серверные каналы', 'server channels') : L('серверы и ЛС', 'servers & DMs')}</div>
     </div>
     <div style="background:var(--input);border:1px solid var(--border);border-radius:10px;padding:12px">
-      <div class="kpi-label">Объём текста</div>
-      <div class="kpi-val">${totalChars.toLocaleString('ru-RU')}</div>
-      <div class="kpi-sub">${totalWords.toLocaleString('ru-RU')} слов</div>
+      <div class="kpi-label">${L('Объём текста', 'Text Volume')}</div>
+      <div class="kpi-val">${totalChars.toLocaleString(uiLocale())}</div>
+      <div class="kpi-sub">${totalWords.toLocaleString(uiLocale())} ${L('слов', 'words')}</div>
     </div>
     <div style="background:var(--input);border:1px solid var(--border);border-radius:10px;padding:12px">
-      <div class="kpi-label">Пик за 10 мин</div>
+      <div class="kpi-label">${L('Пик за 10 мин', '10-min Peak')}</div>
       <div class="kpi-val">${s.peak_user_msgs * 2}</div>
-      <div class="kpi-sub">${esc(s.peak_slot)} (${s.duration_min} мин)</div>
+      <div class="kpi-sub">${esc(s.peak_slot)} (${s.duration_min} ${L('мин', 'min')})</div>
     </div>
   `;
 
@@ -11207,7 +11355,7 @@ function cssVar(name, fallback) { return getComputedStyle(document.documentEleme
 function drawLeaderboardCanvas(id, users) {
   const { ctx, w, h } = setupCanvas(id);
   const fg = cssVar('--text', '#eef2ff'), bgBar = cssVar('--input', '#0e121d');
-  if (!users.length) { ctx.fillStyle = '#8e9bb6'; ctx.font = '13px Inter, sans-serif'; ctx.fillText('Пока нет данных', 16, 36); return; }
+  if (!users.length) { ctx.fillStyle = '#8e9bb6'; ctx.font = '13px Inter, sans-serif'; ctx.fillText(L('Пока нет данных', 'No data yet'), 16, 36); return; }
   const top = users.slice(0, 6);
   const maxM = Math.max(1, ...top.map(u => u.msgs));
   const totM = Math.max(1, users.reduce((a, b) => a + b.msgs, 0));
@@ -11228,7 +11376,7 @@ function drawLeaderboardCanvas(id, users) {
 function drawDonutCanvas(id, users, totalUserChars) {
   const { ctx, w, h } = setupCanvas(id);
   const fg = cssVar('--text', '#eef2ff'), cardBg = cssVar('--card', '#121621');
-  if (!users.length || !totalUserChars) { ctx.fillStyle = '#8e9bb6'; ctx.font = '13px Inter, sans-serif'; ctx.fillText('Нет данных', 16, 36); return; }
+  if (!users.length || !totalUserChars) { ctx.fillStyle = '#8e9bb6'; ctx.font = '13px Inter, sans-serif'; ctx.fillText(L('Нет данных', 'No data'), 16, 36); return; }
   const byChars = [...users].sort((a, b) => b.chars - a.chars).slice(0, 6);
   const cx = Math.min(w * 0.28, 120), cy = h / 2, r = Math.min(cx - 14, h * 0.40);
   let angle = -Math.PI / 2;
@@ -11242,7 +11390,7 @@ function drawDonutCanvas(id, users, totalUserChars) {
   ctx.fillStyle = fg; ctx.font = '700 15px Inter, sans-serif'; ctx.textAlign = 'center';
   ctx.fillText(totalUserChars.toLocaleString('ru-RU'), cx, cy + 2);
   ctx.fillStyle = '#8e9bb6'; ctx.font = '11px Inter, sans-serif';
-  ctx.fillText('символов', cx, cy + 17); ctx.textAlign = 'left';
+  ctx.fillText(L('символов', 'chars'), cx, cy + 17); ctx.textAlign = 'left';
 
   const lx = cx + r + 24;
   byChars.forEach((u, i) => {
@@ -11258,7 +11406,7 @@ function drawDonutCanvas(id, users, totalUserChars) {
 function drawTimelineCanvas(id, timeline, users) {
   const { ctx, w, h } = setupCanvas(id);
   const fg = cssVar('--text', '#eef2ff');
-  if (!timeline.length) { ctx.fillStyle = '#8e9bb6'; ctx.font = '13px Inter, sans-serif'; ctx.fillText('Нет данных', 16, 36); return; }
+  if (!timeline.length) { ctx.fillStyle = '#8e9bb6'; ctx.font = '13px Inter, sans-serif'; ctx.fillText(L('Нет данных', 'No data'), 16, 36); return; }
   const padL = 32, padB = 26, padT = 20, padR = 12;
   const plotW = w - padL - padR, plotH = h - padT - padB;
   const maxV = Math.max(1, ...timeline.map(t => t.total));
@@ -11290,7 +11438,7 @@ function drawTimelineCanvas(id, timeline, users) {
 function drawLengthsCanvas(id, users) {
   const { ctx, w, h } = setupCanvas(id);
   const fg = cssVar('--text', '#eef2ff');
-  if (!users.length) { ctx.fillStyle = '#8e9bb6'; ctx.font = '13px Inter, sans-serif'; ctx.fillText('Нет данных', 16, 36); return; }
+  if (!users.length) { ctx.fillStyle = '#8e9bb6'; ctx.font = '13px Inter, sans-serif'; ctx.fillText(L('Нет данных', 'No data'), 16, 36); return; }
   const top = [...users].sort((a, b) => b.avg_len - a.avg_len).slice(0, 5);
   const maxL = Math.max(1, ...top.flatMap(u => [u.avg_len, u.bot_avg_len]));
   const rowH = (h - 20) / top.length;
@@ -11301,13 +11449,13 @@ function drawLengthsCanvas(id, users) {
     const wu = Math.max(8, (w - 86) * (u.avg_len / maxL));
     ctx.beginPath(); ctx.roundRect(10, y + 17, wu, 8, 4); ctx.fill();
     ctx.fillStyle = '#94a3b8'; ctx.font = '10.5px Inter, sans-serif';
-    ctx.fillText(`${Math.round(u.avg_len)} (юзер)`, 16 + wu, y + 25);
+    ctx.fillText(`${Math.round(u.avg_len)} (${L('юзер', 'user')})`, 16 + wu, y + 25);
 
     ctx.fillStyle = '#a78bfa';
     const wb = Math.max(8, (w - 86) * (u.bot_avg_len / maxL));
     ctx.beginPath(); ctx.roundRect(10, y + 29, wb, 8, 4); ctx.fill();
     ctx.fillStyle = '#c4b5fd';
-    ctx.fillText(`${Math.round(u.bot_avg_len)} (бот)`, 16 + wb, y + 37);
+    ctx.fillText(`${Math.round(u.bot_avg_len)} (${L('бот', 'bot')})`, 16 + wb, y + 37);
   });
 }
 
@@ -11318,16 +11466,16 @@ function exportAnalyticsPNG() {
   const ctx = out.getContext('2d');
   ctx.fillStyle = '#090b10'; ctx.fillRect(0, 0, out.width, out.height);
   ctx.fillStyle = '#f8fafc'; ctx.font = '700 28px Inter, sans-serif';
-  ctx.fillText(`Итоговая статистика (${analyticsScope === 'servers' ? 'Серверы' : 'Все чаты'})`, 40, 54);
+  ctx.fillText(L(`Итоговая статистика (${analyticsScope === 'servers' ? 'Серверы' : 'Все чаты'})`, `Summary Statistics (${analyticsScope === 'servers' ? 'Servers' : 'All Chats'})`), 40, 54);
   const s = analyticsData.summary;
   ctx.fillStyle = '#94a3b8'; ctx.font = '14px Inter, sans-serif';
-  ctx.fillText(`Сообщений: ${s.total_msgs}  •  Участников: ${s.unique_users}  •  Символов: ${(s.user_chars + s.bot_chars).toLocaleString('ru-RU')}  •  Пик: ${s.peak_slot}`, 40, 84);
+  ctx.fillText(L(`Сообщений: ${s.total_msgs}  •  Участников: ${s.unique_users}  •  Символов: ${(s.user_chars + s.bot_chars).toLocaleString(uiLocale())}  •  Пик: ${s.peak_slot}`, `Messages: ${s.total_msgs}  •  Users: ${s.unique_users}  •  Chars: ${(s.user_chars + s.bot_chars).toLocaleString(uiLocale())}  •  Peak: ${s.peak_slot}`), 40, 84);
 
   const panels = [
-    ['cv-leaderboard', 'Лидерборд по сообщениям', 40, 118, 640, 322],
-    ['cv-donut', 'Объём текста', 720, 118, 640, 322],
-    ['cv-timeline', 'Динамика по времени', 40, 468, 640, 322],
-    ['cv-lengths', 'Средняя длина: Участник vs Бот', 720, 468, 640, 322],
+    ['cv-leaderboard', L('Лидерборд по сообщениям', 'Message Leaderboard'), 40, 118, 640, 322],
+    ['cv-donut', L('Объём текста', 'Text Volume'), 720, 118, 640, 322],
+    ['cv-timeline', L('Динамика по времени', 'Activity Timeline'), 40, 468, 640, 322],
+    ['cv-lengths', L('Средняя длина: Участник vs Бот', 'Avg Length: User vs Bot'), 720, 468, 640, 322],
   ];
   for (const [id, title, x, y, w, h] of panels) {
     ctx.fillStyle = '#121621'; ctx.strokeStyle = '#22283a'; ctx.lineWidth = 1.5;
@@ -11341,7 +11489,7 @@ function exportAnalyticsPNG() {
   const a = document.createElement('a');
   a.download = `selfbot_analytics_${analyticsScope}.png`;
   a.href = out.toDataURL('image/png'); a.click();
-  toast('Инфографика сохранена в PNG');
+  toast(L('Инфографика сохранена в PNG', 'Analytics exported to PNG'));
 }
 
 // ============================================================================
@@ -11423,6 +11571,7 @@ function readUiThemeForm() {
     compact_mode: document.getElementById('ui-chk-compact').checked,
     ambient_glow: document.getElementById('ui-chk-glow').checked,
     custom_css: document.getElementById('ui-inp-css').value,
+    language: uiLang,
   };
 }
 
@@ -11445,24 +11594,24 @@ function applyThemePreset(idx) {
   document.getElementById('ui-col-card').value = p.color_card;
   document.getElementById('ui-col-text').value = p.color_text;
   previewUiFromForm();
-  toast(`Превью «${p.name}» — нажми «Сохранить тему»`);
+  toast(L(`Превью «${p.name}» — нажми «Сохранить тему»`, `Preview "${p.name}" — click Save Theme`));
 }
 
 async function saveUiTheme() {
   const res = await api('/api/ui-theme', { method: 'POST', body: JSON.stringify(readUiThemeForm()) });
-  if (res.ok) { uiThemeDirty = false; applyUiThemeToDOM(res.ui_theme); refreshDirtyBar(); toast('Тема сохранена'); }
-  else toast(res.error || 'Ошибка', true);
+  if (res.ok) { uiThemeDirty = false; applyUiThemeToDOM(res.ui_theme); refreshDirtyBar(); toast(L('Тема сохранена', 'Theme saved')); }
+  else toast(res.error || L('Ошибка', 'Error'), true);
 }
 
 async function resetUiTheme() {
   const res = await api('/api/ui-theme', { method: 'POST', body: JSON.stringify({ reset: true }) });
-  if (res.ok) { uiThemeDirty = false; applyUiThemeToDOM(res.ui_theme); fillUiThemeForm(res.ui_theme); refreshDirtyBar(); toast('Тема сброшена'); }
+  if (res.ok) { uiThemeDirty = false; applyUiThemeToDOM(res.ui_theme); fillUiThemeForm(res.ui_theme); applyUiLanguage(res.ui_theme.language || 'ru', true); refreshDirtyBar(); toast(L('Тема сброшена', 'Theme reset')); }
 }
 
 // ============================================================================
 // НАСТРОЙКИ И БЭКАП JSON
 // ============================================================================
-async function clearGiphyKey() { await api('/api/settings', { method: 'POST', body: JSON.stringify({ clear_giphy_api_key: true }) }); document.getElementById('set-giphy').value = ''; toast('Giphy ключ удалён'); }
+async function clearGiphyKey() { await api('/api/settings', { method: 'POST', body: JSON.stringify({ clear_giphy_api_key: true }) }); document.getElementById('set-giphy').value = ''; toast(L('Giphy ключ удалён', 'Giphy key removed')); }
 
 async function saveSettings() {
   const payload = {
@@ -11486,32 +11635,32 @@ async function saveSettings() {
     channel_cooldown_max: Number(document.getElementById('set-chmax').value),
   };
   const res = await api('/api/settings', { method: 'POST', body: JSON.stringify(payload) });
-  if (!res.ok) { toast(res.error || 'Ошибка', true); return; }
+  if (!res.ok) { toast(res.error || L('Ошибка', 'Error'), true); return; }
   clearDirtyFlags(['set-endpoint','set-model','set-dos-every','set-vision-max','set-fts-max','set-af-rate','set-af-user','set-af-chars','set-ghost-win','set-gif-ch','set-rmin','set-rmax','set-cmin','set-cmax','set-chmin','set-chmax']);
   document.getElementById('set-apikey').value = '';
   document.getElementById('set-giphy').value = '';
   clearDirtyFlags(['set-apikey', 'set-giphy']);
   populateModelsSelect(res.models);
-  toast(res.llm_online ? `Сохранено • LLM онлайн (${res.ms}ms)` : 'Сохранено • LLM оффлайн', !res.llm_online);
+  toast(res.llm_online ? L(`Сохранено • LLM онлайн (${res.ms}ms)`, `Saved • LLM Online (${res.ms}ms)`) : L('Сохранено • LLM оффлайн', 'Saved • LLM Offline'), !res.llm_online);
 }
 
-function exportBackup() { window.location.href = '/api/backup/export'; toast('Скачивание бэкапа...'); }
+function exportBackup() { window.location.href = '/api/backup/export'; toast(L('Скачивание бэкапа...', 'Downloading backup...')); }
 
 async function importBackup(input) {
   const f = input.files?.[0]; if (!f) return;
   try {
     const parsed = JSON.parse(await f.text());
     const res = await api('/api/backup/import', { method: 'POST', body: JSON.stringify(parsed) });
-    if (res.ok) toast(`Импорт OK (досье: ${res.counts.dossiers}, ролей: ${res.counts.overrides})`);
-    else toast(res.error || 'Ошибка импорта', true);
-  } catch (e) { toast('Некорректный JSON файл', true); }
+    if (res.ok) toast(L(`Импорт OK (досье: ${res.counts.dossiers}, ролей: ${res.counts.overrides})`, `Import OK (dossiers: ${res.counts.dossiers}, overrides: ${res.counts.overrides})`));
+    else toast(res.error || L('Ошибка импорта', 'Import error'), true);
+  } catch (e) { toast(L('Некорректный JSON файл', 'Invalid JSON file'), true); }
   input.value = '';
 }
 
 async function shutdownBot() {
-  if (!(await uiConfirm({ title: 'Остановить программу целиком?', message: 'Бот отключится от Discord, а локальная веб-панель прекратит работу.', confirmText: 'Остановить', danger: true }))) return;
+  if (!(await uiConfirm({ title: L('Остановить программу целиком?', 'Shut down the entire app?'), message: L('Бот отключится от Discord, а локальная веб-панель прекратит работу.', 'The bot will disconnect from Discord and the local web panel will stop.'), confirmText: L('Остановить', 'Shut Down'), danger: true }))) return;
   await api('/api/shutdown', { method: 'POST' });
-  toast('Останавливаю...');
+  toast(L('Останавливаю...', 'Shutting down...'));
 }
 
 // ============================================================================
@@ -11621,7 +11770,7 @@ function drawAffinityTrend() {
     : graphHistory;
   if (!pts.length) {
     ctx.fillStyle = '#94a3b8'; ctx.font = '12px Inter, sans-serif';
-    ctx.fillText('Изменений симпатии за 7 дней пока нет', 10, h / 2);
+    ctx.fillText(L('Изменений симпатии за 7 дней пока нет', 'No affinity changes in the last 7 days'), 10, h / 2);
     return;
   }
   const pad = 22;
@@ -11651,8 +11800,8 @@ function drawAffinityTrend() {
       graphDragNode = n; graphSelectedNode = n; cv.style.cursor = 'grabbing';
       const box = document.getElementById('graph-node-info');
       box.innerHTML = n.is_bot
-        ? `<b>${esc(n.label)}</b><br><span style="color:var(--muted)">Центр сети • всего сообщений: ${n.msgs}</span>`
-        : `<b>${esc(n.label)}</b> <small>(${esc(n.id)})</small><div style="margin:6px 0">Симпатия: <b>${n.affinity > 0 ? '+' : ''}${n.affinity}/10</b> • Сообщений: <b>${n.msgs}</b>${n.mood ? ` • ${esc(n.mood)}` : ''}</div><div style="white-space:pre-wrap;color:var(--muted)">${n.facts ? esc(n.facts) : 'Досье пока пусто'}</div>`;
+        ? `<b>${esc(n.label)}</b><br><span style="color:var(--muted)">${L('Центр сети • всего сообщений', 'Network center • total messages')}: ${n.msgs}</span>`
+        : `<b>${esc(n.label)}</b> <small>(${esc(n.id)})</small><div style="margin:6px 0">${L('Симпатия', 'Affinity')}: <b>${n.affinity > 0 ? '+' : ''}${n.affinity}/10</b> • ${L('Сообщений', 'Messages')}: <b>${n.msgs}</b>${n.mood ? ` • ${esc(n.mood)}` : ''}</div><div style="white-space:pre-wrap;color:var(--muted)">${n.facts ? esc(n.facts) : L('Досье пока пусто', 'Dossier is empty')}</div>`;
       drawSocialGraph(); drawAffinityTrend();
     }
   });
@@ -11672,34 +11821,34 @@ function drawAffinityTrend() {
 async function loadGames() {
   const sel = document.getElementById('game-sel-ch');
   if (sel && availChannelsCache.length) {
-    sel.innerHTML = '<option value="">Выбрать канал...</option>' +
+    sel.innerHTML = `<option value="">${L('Выбрать канал...', 'Pick a channel...')}</option>` +
       availChannelsCache.slice(0, 150).map(c => `<option value="${esc(c.id)}">${esc(c.guild)} — ${esc(c.name)}</option>`).join('');
   }
   const res = await api('/api/games');
   const active = res.active || [];
   const aBox = document.getElementById('games-active-list');
   if (!active.length) {
-    aBox.innerHTML = renderEmptyState({ icon: 'gamepad', title: 'Активных игр нет', desc: 'Выбери игру и канал Discord слева, чтобы запустить сессию в чате.', actionText: 'Указать канал', actionOnclick: "document.getElementById('game-inp-ch').focus()", compact: true });
+    aBox.innerHTML = renderEmptyState({ icon: 'gamepad', title: L('Активных игр нет', 'No active games'), desc: L('Выбери игру и канал Discord слева, чтобы запустить сессию в чате.', 'Choose a game and Discord channel on the left to launch a session.'), actionText: L('Указать канал', 'Pick Channel'), actionOnclick: "document.getElementById('game-inp-ch').focus()", compact: true });
   } else {
     aBox.innerHTML = active.map(g => `
       <div class="chip-item">
         <div style="min-width:0">
           <b>${esc(g.title)}</b> <span class="badge badge-cyan">${esc(g.channel_name || g.channel_id)}</span>
-          <small>${esc(g.guild_name || '')} • ${g.state?.last_word ? 'Последнее слово: ' + esc(g.state.last_word) : (g.state?.topic ? 'Тема: ' + esc(g.state.topic.slice(0, 50)) : 'Идёт игра')}</small>
+          <small>${esc(g.guild_name || '')} • ${g.state?.last_word ? L('Последнее слово: ', 'Last word: ') + esc(g.state.last_word) : (g.state?.topic ? L('Тема: ', 'Topic: ') + esc(g.state.topic.slice(0, 50)) : L('Идёт игра', 'In progress'))}</small>
         </div>
-        <button class="btn btn-sm btn-danger no-grow" onclick="stopChatGame('${esc(g.channel_id)}')">Завершить</button>
+        <button class="btn btn-sm btn-danger no-grow" onclick="stopChatGame('${esc(g.channel_id)}')">${L('Завершить', 'Stop')}</button>
       </div>
     `).join('');
   }
   const board = res.leaderboard || [];
   const lBox = document.getElementById('games-leaderboard');
   if (!board.length) {
-    lBox.innerHTML = renderEmptyState({ icon: 'trophy', title: 'Таблица лидеров пуста', desc: 'Очки и победы игроков автоматически появятся здесь после первых раундов.', compact: true });
+    lBox.innerHTML = renderEmptyState({ icon: 'trophy', title: L('Таблица лидеров пуста', 'Leaderboard is empty'), desc: L('Очки и победы игроков автоматически появятся здесь после первых раундов.', 'Player scores and wins will appear here automatically after the first rounds.'), compact: true });
   } else {
     lBox.innerHTML = board.map((u, idx) => `
       <div class="chip-item">
-        <div><b>#${idx + 1} ${esc(u.username)}</b><small>ID: ${esc(u.user_id)} • Побед: ${u.wins}</small></div>
-        <span class="badge badge-dm">${u.points} очк.</span>
+        <div><b>#${idx + 1} ${esc(u.username)}</b><small>ID: ${esc(u.user_id)} • ${L('Побед', 'Wins')}: ${u.wins}</small></div>
+        <span class="badge badge-dm">${u.points} ${L('очк.', 'pts')}</span>
       </div>
     `).join('');
   }
@@ -11712,21 +11861,21 @@ async function startChatGame() {
   const res = await api('/api/games/start', { method: 'POST', body: JSON.stringify({ channel_id: cid, game_type: gtype, topic }) });
   if (res.ok) {
     document.getElementById('game-inp-topic').value = '';
-    toast(res.sent_to_discord ? 'Игра запущена и анонсирована в Discord!' : 'Игра запущена (Discord оффлайн)');
+    toast(res.sent_to_discord ? L('Игра запущена и анонсирована в Discord!', 'Game launched and announced in Discord!') : L('Игра запущена (Discord оффлайн)', 'Game launched (Discord offline)'));
     loadGames();
-  } else toast(res.error || 'Ошибка запуска', true);
+  } else toast(res.error || L('Ошибка запуска', 'Launch failed'), true);
 }
 
 async function stopChatGame(cid) {
   await api('/api/games/' + encodeURIComponent(cid), { method: 'DELETE' });
-  toast('Игра завершена');
+  toast(L('Игра завершена', 'Game stopped'));
   loadGames();
 }
 
 async function clearGameScores() {
-  if (!(await uiConfirm({ title: 'Сбросить таблицу лидеров?', message: 'Все набранные очки и победы участников в мини-играх будут обнулены.', confirmText: 'Сбросить счёт', danger: true }))) return;
+  if (!(await uiConfirm({ title: L('Сбросить таблицу лидеров?', 'Reset leaderboard?'), message: L('Все набранные очки и победы участников в мини-играх будут обнулены.', 'All player points and wins in mini-games will be cleared.'), confirmText: L('Сбросить счёт', 'Reset Scores'), danger: true }))) return;
   await api('/api/games/scores/clear', { method: 'POST' });
-  toast('Таблица лидеров очищена');
+  toast(L('Таблица лидеров очищена', 'Leaderboard cleared'));
   loadGames();
 }
 
@@ -11753,14 +11902,14 @@ function applyHardwareHUD(hw) {
   rBar.className = 'hw-bar' + (hw.ram_percent >= 88 ? ' hot' : (hw.ram_percent >= 75 ? ' warn' : ''));
   const freeVram = hw.gpu_available ? Math.max(0, hw.vram_total_gb - hw.vram_used_gb).toFixed(1) : '—';
   hud.title = hw.gpu_available
-    ? `${hw.gpu_name} | GPU ${hw.gpu_util}% | ${hw.gpu_temp}°C | VRAM ${hw.vram_used_gb}/${hw.vram_total_gb} ГБ (свободно ${freeVram} ГБ) | RAM ${hw.ram_used_gb}/${hw.ram_total_gb} ГБ`
-    : `GPU: nvidia-smi не найден | RAM: ${hw.ram_used_gb}/${hw.ram_total_gb} ГБ (${hw.ram_percent}%)`;
+    ? L(`${hw.gpu_name} | GPU ${hw.gpu_util}% | ${hw.gpu_temp}°C | VRAM ${hw.vram_used_gb}/${hw.vram_total_gb} ГБ (свободно ${freeVram} ГБ) | RAM ${hw.ram_used_gb}/${hw.ram_total_gb} ГБ`, `${hw.gpu_name} | GPU ${hw.gpu_util}% | ${hw.gpu_temp}°C | VRAM ${hw.vram_used_gb}/${hw.vram_total_gb} GB (free ${freeVram} GB) | RAM ${hw.ram_used_gb}/${hw.ram_total_gb} GB`)
+    : L(`GPU: nvidia-smi не найден | RAM: ${hw.ram_used_gb}/${hw.ram_total_gb} ГБ (${hw.ram_percent}%)`, `GPU: nvidia-smi not found | RAM: ${hw.ram_used_gb}/${hw.ram_total_gb} GB (${hw.ram_percent}%)`);
 }
 
 async function refreshHardware() {
   const snap = await api('/api/hardware');
   applyHardwareHUD(snap);
-  toast('Показатели железа обновлены');
+  toast(L('Показатели железа обновлены', 'Hardware metrics refreshed'));
 }
 
 // ============================================================================
@@ -11808,7 +11957,7 @@ function closeMobileSidebar() {
 // ============================================================================
 let _confirmResolver = null;
 
-function uiConfirm({ title = 'Подтвердите действие', message = '', confirmText = 'Подтвердить', danger = true } = {}) {
+function uiConfirm({ title = L('Подтвердите действие', 'Confirm Action'), message = '', confirmText = L('Подтвердить', 'Confirm'), danger = true } = {}) {
   return new Promise((resolve) => {
     if (_confirmResolver) _confirmResolver(false);
     _confirmResolver = resolve;
@@ -11851,10 +12000,10 @@ function getDirtySummary() {
   const themeCount = uiThemeDirty ? 1 : 0;
   const total = (dmDirty ? 1 : 0) + (srvDirty ? 1 : 0) + filtersCount + settingsCount + themeCount;
   const sections = [];
-  if (dmDirty || srvDirty) sections.push('Роли');
-  if (filtersCount) sections.push('Фильтры');
-  if (settingsCount) sections.push('Настройки');
-  if (themeCount) sections.push('Тема');
+  if (dmDirty || srvDirty) sections.push(L('Роли', 'Roles'));
+  if (filtersCount) sections.push(L('Фильтры', 'Filters'));
+  if (settingsCount) sections.push(L('Настройки', 'Settings'));
+  if (themeCount) sections.push(L('Тема', 'Theme'));
   return { total, dmDirty, srvDirty, filtersCount, settingsCount, themeCount, sections };
 }
 
@@ -11863,7 +12012,7 @@ function refreshDirtyBar() {
   if (!bar) return;
   const s = getDirtySummary();
   if (s.total > 0) {
-    document.getElementById('dirty-bar-text').textContent = `Несохранённых правок: ${s.total} (${s.sections.join(', ')})`;
+    document.getElementById('dirty-bar-text').textContent = L(`Несохранённых правок: ${s.total} (${s.sections.join(', ')})`, `Unsaved changes: ${s.total} (${s.sections.join(', ')})`);
     bar.classList.add('show');
   } else {
     bar.classList.remove('show');
@@ -11882,7 +12031,7 @@ function discardDirtyChanges() {
   uiThemeDirty = false;
   if (state) applyState(state);
   refreshDirtyBar();
-  toast('Несохранённые изменения отменены');
+  toast(L('Несохранённые изменения отменены', 'Unsaved changes discarded'));
 }
 
 async function saveAllDirtyChanges() {
@@ -11908,27 +12057,30 @@ let cmdkFiltered = [];
 let cmdkActiveIdx = 0;
 
 function getCmdKItems() {
-  const activeTxt = state?.bot?.active ? 'Поставить бота на паузу' : 'Включить автоответчик бота';
+  const activeTxt = state?.bot?.active ? L('Поставить бота на паузу', 'Pause Bot') : L('Включить автоответчик бота', 'Resume Bot');
+  const gAct = L('Быстрые команды', 'Quick Actions');
+  const gNav = L('Навигация', 'Navigation');
   const navIco = '<polyline points="9 18 15 12 9 6"/>';
   const actIco = '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>';
   return [
-    { group: 'Быстрые команды', title: activeTxt, sub: 'Мгновенное переключение мастера активности', kw: 'старт пауза вкл выкл toggle start pause bot', ico: actIco, run: () => toggleMaster() },
-    { group: 'Быстрые команды', title: 'Проверить LM Studio', sub: 'Пинг локальной LLM и обновление списка моделей', kw: 'ping llm lm studio тест модель', ico: actIco, run: () => pingLLM() },
-    { group: 'Быстрые команды', title: 'Сбросить кэш ответов', sub: 'Очистить TTL-кэш быстрых реплик в RAM', kw: 'cache clear сброс кэш', ico: actIco, run: () => clearCache() },
-    { group: 'Быстрые команды', title: 'Экспорт бэкапа JSON', sub: 'Скачать настройки, роли и досье (без секретов)', kw: 'backup export json бэкап экспорт', ico: actIco, run: () => exportBackup() },
-    { group: 'Быстрые команды', title: 'Обновить GPU / VRAM / RAM HUD', sub: 'Опросить nvidia-smi и системную память', kw: 'gpu vram ram hardware железо монитор', ico: actIco, run: () => refreshHardware() },
-    { group: 'Быстрые команды', title: 'Сжать старую память', sub: 'Запустить Memory Compaction для длинных веток', kw: 'compact memory сжать память', ico: actIco, run: () => compactMemory() },
-    { group: 'Быстрые команды', title: 'Остановить программу', sub: 'Безопасно выключить бота и веб-панель', kw: 'shutdown stop exit выход стоп', ico: actIco, run: () => shutdownBot() },
-    { group: 'Навигация', title: 'Обзор и Логи', sub: 'KPI, 4 группы модулей, живые логи и лента событий', kw: 'dashboard обзор логи диагностика', ico: navIco, run: () => openTab('dashboard') },
-    { group: 'Навигация', title: 'Роли и Тестер', sub: 'Пресеты, системные промпты, Overrides, Песочница и Арена A/B', kw: 'personas роли промпт тестер арена', ico: navIco, run: () => openTab('personas') },
-    { group: 'Навигация', title: 'Каналы и Память', sub: 'Белый список, FTS5 поиск, напоминания, события и редактор истории', kw: 'channels каналы память fts5 фильтры напоминания др', ico: navIco, run: () => openTab('channels') },
-    { group: 'Навигация', title: 'Досье и симпатия', sub: 'Профили собеседников, факты и шкала Affinity', kw: 'dossiers досье симпатия affinity', ico: navIco, run: () => openTab('dossiers') },
-    { group: 'Навигация', title: 'Сохранёнки (memes/)', sub: 'Локальные картинки, гифки и автоописание Vision', kw: 'memes мемы сохранёнки картинки', ico: navIco, run: () => openTab('memes') },
-    { group: 'Навигация', title: 'Аналитика и PNG', sub: 'Лидерборд, графики активности и экспорт отчёта', kw: 'analytics аналитика графики png', ico: navIco, run: () => openTab('analytics') },
-    { group: 'Навигация', title: 'Граф отношений', sub: 'Интерактивная сеть связей и динамика симпатии', kw: 'graph граф отношений сеть', ico: navIco, run: () => openTab('graph') },
-    { group: 'Навигация', title: 'Мини-игры в чате', sub: 'Слова, Угадайка, Данетки, Правда/действие и лидерборд', kw: 'games игры мини-игры слова данетки', ico: navIco, run: () => openTab('games') },
-    { group: 'Навигация', title: 'Веб-клиент и оформление', sub: 'Темы, цвета, шрифты, скругления и кастомный CSS', kw: 'webclient тема дизайн css оформление', ico: navIco, run: () => openTab('webclient') },
-    { group: 'Навигация', title: 'Настройки и бэкап', sub: 'Токен Discord, LM Studio, GPU Guard, Giphy и тайминги', kw: 'settings настройки токен giphy тайминги', ico: navIco, run: () => openTab('settings') },
+    { group: gAct, title: activeTxt, sub: L('Мгновенное переключение мастера активности', 'Toggle bot auto-responder on or off'), kw: 'старт пауза вкл выкл toggle start pause bot', ico: actIco, run: () => toggleMaster() },
+    { group: gAct, title: L('Переключить язык: English', 'Switch Language: Русский'), sub: L('Сменить язык веб-интерфейса (RU / EN)', 'Switch web interface language (RU / EN)'), kw: 'язык language english russian ru en locale i18n', ico: actIco, run: () => setUiLanguage(uiLang === 'en' ? 'ru' : 'en', true) },
+    { group: gAct, title: L('Проверить LM Studio', 'Check LM Studio'), sub: L('Пинг локальной LLM и обновление списка моделей', 'Ping local LLM server and refresh model list'), kw: 'ping llm lm studio тест модель check', ico: actIco, run: () => pingLLM() },
+    { group: gAct, title: L('Сбросить кэш ответов', 'Clear Reply Cache'), sub: L('Очистить TTL-кэш быстрых реплик в RAM', 'Clear in-memory TTL response cache'), kw: 'cache clear сброс кэш', ico: actIco, run: () => clearCache() },
+    { group: gAct, title: L('Экспорт бэкапа JSON', 'Export JSON Backup'), sub: L('Скачать настройки, роли и досье (без секретов)', 'Download settings, roles & dossiers (no secrets)'), kw: 'backup export json бэкап экспорт', ico: actIco, run: () => exportBackup() },
+    { group: gAct, title: L('Обновить GPU / VRAM / RAM HUD', 'Refresh GPU / VRAM / RAM HUD'), sub: L('Опросить nvidia-smi и системную память', 'Poll nvidia-smi and system memory'), kw: 'gpu vram ram hardware железо монитор refresh', ico: actIco, run: () => refreshHardware() },
+    { group: gAct, title: L('Сжать старую память', 'Compact Old Memory'), sub: L('Запустить Memory Compaction для длинных веток', 'Run Memory Compaction on long threads'), kw: 'compact memory сжать память', ico: actIco, run: () => compactMemory() },
+    { group: gAct, title: L('Остановить программу', 'Shut Down App'), sub: L('Безопасно выключить бота и веб-панель', 'Safely stop the bot and local web panel'), kw: 'shutdown stop exit выход стоп', ico: actIco, run: () => shutdownBot() },
+    { group: gNav, title: L('Обзор и Логи', 'Overview & Logs'), sub: L('KPI, 4 группы модулей, живые логи и лента событий', 'KPIs, 4 module groups, live logs & activity feed'), kw: 'dashboard обзор логи диагностика overview logs', ico: navIco, run: () => openTab('dashboard') },
+    { group: gNav, title: L('Роли и Тестер', 'Roles & Sandbox'), sub: L('Пресеты, системные промпты, Overrides, Песочница и Арена A/B', 'Presets, system prompts, overrides, sandbox & A/B arena'), kw: 'personas роли промпт тестер арена roles sandbox', ico: navIco, run: () => openTab('personas') },
+    { group: gNav, title: L('Каналы и Память', 'Channels & Memory'), sub: L('Белый список, FTS5 поиск, напоминания, события и редактор истории', 'Whitelist, FTS5 search, reminders, events & history editor'), kw: 'channels каналы память fts5 фильтры напоминания др memory', ico: navIco, run: () => openTab('channels') },
+    { group: gNav, title: L('Досье и симпатия', 'Dossiers & Affinity'), sub: L('Профили собеседников, факты и шкала Affinity', 'User profiles, notes & Affinity scale'), kw: 'dossiers досье симпатия affinity', ico: navIco, run: () => openTab('dossiers') },
+    { group: gNav, title: L('Сохранёнки (memes/)', 'Saved Memes (memes/)'), sub: L('Локальные картинки, гифки и автоописание Vision', 'Local images, GIFs & Vision auto-tagging'), kw: 'memes мемы сохранёнки картинки saved', ico: navIco, run: () => openTab('memes') },
+    { group: gNav, title: L('Аналитика и PNG', 'Analytics & PNG'), sub: L('Лидерборд, графики активности и экспорт отчёта', 'Leaderboard, activity charts & PNG report export'), kw: 'analytics аналитика графики png', ico: navIco, run: () => openTab('analytics') },
+    { group: gNav, title: L('Граф отношений', 'Social Graph'), sub: L('Интерактивная сеть связей и динамика симпатии', 'Interactive network & 7-day affinity trend'), kw: 'graph граф отношений сеть social', ico: navIco, run: () => openTab('graph') },
+    { group: gNav, title: L('Мини-игры в чате', 'Chat Mini-Games'), sub: L('Слова, Угадайка, Данетки, Правда/действие и лидерборд', 'Word Chain, 20 Questions, Riddles, Truth/Dare & scores'), kw: 'games игры мини-игры слова данетки', ico: navIco, run: () => openTab('games') },
+    { group: gNav, title: L('Веб-клиент и оформление', 'Web Client & Appearance'), sub: L('Язык, темы, цвета, шрифты, скругления и кастомный CSS', 'Language, themes, colors, fonts, radius & custom CSS'), kw: 'webclient тема дизайн css оформление язык language theme', ico: navIco, run: () => openTab('webclient') },
+    { group: gNav, title: L('Настройки и бэкап', 'Settings & Backup'), sub: L('Токен Discord, LM Studio, GPU Guard, Giphy и тайминги', 'Discord token, LM Studio, GPU Guard, Giphy & timings'), kw: 'settings настройки токен giphy тайминги backup', ico: navIco, run: () => openTab('settings') },
   ];
 }
 
@@ -11953,7 +12105,7 @@ function renderCmdK() {
   if (cmdkActiveIdx >= cmdkFiltered.length) cmdkActiveIdx = Math.max(0, cmdkFiltered.length - 1);
   const box = document.getElementById('cmdk-list');
   if (!cmdkFiltered.length) {
-    box.innerHTML = renderEmptyState({ icon: 'activity', title: 'Команда не найдена', desc: 'Попробуй другой запрос, например «логи», «кэш» или «аналитика».', compact: true });
+    box.innerHTML = renderEmptyState({ icon: 'activity', title: L('Команда не найдена', 'No matching command'), desc: L('Попробуй другой запрос, например «логи», «кэш» или «аналитика».', 'Try another query such as "logs", "cache", or "analytics".'), compact: true });
     return;
   }
   let html = '';
@@ -12028,6 +12180,7 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 
+applyUiLanguage(uiLang, false);
 connectSSE();
 </script>
 </body>

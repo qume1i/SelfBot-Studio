@@ -27,7 +27,16 @@ from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import web
-import discord
+
+try:
+    import discord  # Опционально (требуется только для режима Selfbot / discord.py-self)
+except ImportError:
+    discord = None  # type: ignore[assignment]
+
+_DISCORD_BASE_CLIENT: Any = discord.Client if discord is not None else object
+_DISCORD_SELFBOT_INSTALLED: bool = (
+    discord is not None and getattr(discord, "__title__", "discord.py-self") != "discord"
+)
 
 try:
     from PIL import Image as PILImage, ImageDraw as PILImageDraw  # Опционально для Vision и иконки трея
@@ -54,8 +63,8 @@ DM_SYSTEM_PROMPT = (
     "Ты — личный помощник в личных сообщениях Discord. "
     "ВСЕГДА отвечай строго на русском языке, коротко (1-3 фразы), вежливо, живо и по делу. "
     "Ты помогаешь разбирать личку: если человек пишет с вопросом или просьбой — "
-    "подскажи, помоги или скажи, что передашь владельцу; если просто болтает — "
-    "поддержи лёгкий, дружелюбный и чуть ироничный разговор от лица преданного помощника. "
+    "подскажи, помоги или скажи, что передашь владельцу аккаунта; если просто болтает — "
+    "поддержи лёгкий, дружелюбный и чуть ироничный разговор от лица преданного личного помощника. "
     "Никогда не говори, что ты ИИ, нейросеть, языковая модель или бот. "
     "Не используй ролевые действия в звёздочках вроде *кланяется* и не оборачивай фразы в лишние кавычки."
 )
@@ -72,8 +81,8 @@ SERVER_SYSTEM_PROMPT = (
 
 BUILTIN_PRESETS: List[Dict[str, str]] = [
     {
-        "id": "dm_shrek",
-        "name": "Помощник (ЛС)",
+        "id": "dm_assistant",
+        "name": "Личный помощник (ЛС)",
         "tag": "ЛС",
         "prompt": DM_SYSTEM_PROMPT,
     },
@@ -113,6 +122,17 @@ BUILTIN_PRESETS: List[Dict[str, str]] = [
             "Ты — чилловый геймер из Discord, который шарит за игры (CS, Dota, GTA, Valorant) и мемы. "
             "Отвечай строго на русском, очень коротко (1-2 фразы), неформально и по-дружески, с лёгким игровым сленгом. "
             "Никогда не говори, что ты ИИ или бот. Не используй действия в звёздочках."
+        ),
+    },
+    {
+        "id": "ai_bot_assistant",
+        "name": "ИИ-ассистент (Discord Bot)",
+        "tag": "Bot AI",
+        "prompt": (
+            "Ты — умный, дружелюбный и живой ИИ-ассистент в Discord-сервере и ЛС. "
+            "Отвечай на языке собеседника (по умолчанию на русском), кратко, понятно и по делу (1-4 фразы). "
+            "Помогай с вопросами, кодом, играми, идеями и поддерживай непринуждённое общение в чате. "
+            "Не пиши лишнюю воду и не используй ролевые действия в звёздочках."
         ),
     },
 ]
@@ -329,8 +349,28 @@ def sanitize_meme_filename(filename: str) -> Optional[str]:
 # ==============================================================================
 @dataclass
 class BotConfig:
+    discord_mode: str = field(
+        default_factory=lambda: (
+            "bot"
+            if os.getenv("DISCORD_MODE", "").strip().lower() == "bot"
+            or (not os.getenv("DISCORD_TOKEN", "").strip() and bool(os.getenv("DISCORD_BOT_TOKEN", "").strip()))
+            else "selfbot"
+        )
+    )
     discord_token: str = field(
         default_factory=lambda: os.getenv("DISCORD_TOKEN", "").strip()
+    )
+    discord_bot_token: str = field(
+        default_factory=lambda: os.getenv("DISCORD_BOT_TOKEN", "").strip()
+    )
+    bot_status: str = field(
+        default_factory=lambda: os.getenv("BOT_STATUS", "online").strip().lower() or "online"
+    )
+    bot_activity_type: str = field(
+        default_factory=lambda: os.getenv("BOT_ACTIVITY_TYPE", "listening").strip().lower() or "listening"
+    )
+    bot_activity_text: str = field(
+        default_factory=lambda: os.getenv("BOT_ACTIVITY_TEXT", "AI Chat • LM Studio").strip()
     )
     allowed_channel_ids: Set[int] = field(
         default_factory=lambda: _env_int_set("ALLOWED_CHANNEL_IDS", set())
@@ -4200,15 +4240,456 @@ class CachedIncomingMsg:
     created_mono: float
 
 
+
 # ==============================================================================
-# DISCORD-КЛИЕНТ
+# НАТИВНЫЙ КЛИЕНТ ОФИЦИАЛЬНОГО DISCORD-БОТА (GATEWAY v10 + REST API v10)
+# Работает без конфликта с discord.py-self и без дополнительных библиотек!
 # ==============================================================================
-class DiscordSelfBot(discord.Client):
-    def __init__(self, manager: "BotManager") -> None:
-        super().__init__()
+class BotAuthError(Exception):
+    """Ошибка авторизации официального бота (неверный Bot Token / 401 / WS 4004)."""
+
+
+class BotAPIError(Exception):
+    """HTTP-ошибка Discord REST API v10 (совместима по интерфейсу с discord.HTTPException)."""
+
+    def __init__(self, status: int, message: str, headers: Optional[Dict[str, str]] = None) -> None:
+        super().__init__(f"HTTP {status}: {message}")
+        self.status = int(status)
+        self.response = _SimpleHeadersHolder(headers or {})
+
+
+class _SimpleHeadersHolder:
+    def __init__(self, headers: Dict[str, str]) -> None:
+        self.headers = headers
+
+
+class BotAllowedMentions:
+    def __init__(
+        self,
+        *,
+        everyone: bool = False,
+        roles: bool = False,
+        users: bool = False,
+        replied_user: bool = True,
+    ) -> None:
+        self.everyone = bool(everyone)
+        self.roles = bool(roles)
+        self.users = bool(users)
+        self.replied_user = bool(replied_user)
+
+    @classmethod
+    def none(cls) -> "BotAllowedMentions":
+        return cls(everyone=False, roles=False, users=False, replied_user=False)
+
+    def to_dict(self) -> Dict[str, Any]:
+        parse: List[str] = []
+        if self.everyone:
+            parse.append("everyone")
+        if self.roles:
+            parse.append("roles")
+        if self.users:
+            parse.append("users")
+        return {"parse": parse, "replied_user": self.replied_user}
+
+
+class BotFile:
+    def __init__(self, path: str, filename: Optional[str] = None) -> None:
+        self.path = path
+        self.filename = filename or os.path.basename(path)
+
+
+class BotUser:
+    def __init__(self, data: Dict[str, Any], nick: Optional[str] = None) -> None:
+        self.id: int = int(data.get("id") or 0)
+        self.name: str = str(data.get("username") or f"User {self.id}")
+        self.global_name: str = str(data.get("global_name") or "")
+        self.display_name: str = (nick or self.global_name or self.name).strip() or self.name
+        self.bot: bool = bool(data.get("bot", False))
+        self.discriminator: str = str(data.get("discriminator") or "0")
+        self.activities: List[Any] = []
+
+    def __str__(self) -> str:
+        if self.discriminator and self.discriminator != "0":
+            return f"{self.name}#{self.discriminator}"
+        return self.name
+
+
+class BotRole:
+    def __init__(self, role_id: int, name: str = "") -> None:
+        self.id = int(role_id)
+        self.name = name or str(role_id)
+
+
+class BotAttachment:
+    def __init__(self, data: Dict[str, Any]) -> None:
+        self.id: int = int(data.get("id") or 0)
+        self.filename: str = str(data.get("filename") or "")
+        self.content_type: str = str(data.get("content_type") or "")
+        self.url: str = str(data.get("url") or "")
+        self._waveform: Any = data.get("waveform")
+
+    def is_voice_message(self) -> bool:
+        return bool(self._waveform) or self.filename.lower() == "voice-message.ogg"
+
+
+class _EmbedMedia:
+    def __init__(self, data: Optional[Dict[str, Any]]) -> None:
+        d = data if isinstance(data, dict) else {}
+        self.url: Optional[str] = d.get("url")
+        self.proxy_url: Optional[str] = d.get("proxy_url")
+
+
+class BotEmbed:
+    def __init__(self, data: Dict[str, Any]) -> None:
+        self.image = _EmbedMedia(data.get("image"))
+        self.thumbnail = _EmbedMedia(data.get("thumbnail"))
+
+
+class BotSticker:
+    def __init__(self, data: Dict[str, Any]) -> None:
+        self.id: int = int(data.get("id") or 0)
+        self.name: str = str(data.get("name") or "sticker")
+
+
+class BotMessageFlags:
+    def __init__(self, raw_flags: int = 0) -> None:
+        self.value = int(raw_flags or 0)
+        self.voice = bool(self.value & (1 << 13))
+
+
+class BotMessageReference:
+    def __init__(
+        self, message_id: Optional[int], resolved: Optional["BotMessage"] = None
+    ) -> None:
+        self.message_id = int(message_id) if message_id else None
+        self.resolved = resolved
+
+
+class _BotTypingContext:
+    def __init__(self, client: "OfficialDiscordBotClient", channel_id: int) -> None:
+        self._client = client
+        self._channel_id = channel_id
+        self._task: Optional[asyncio.Task[Any]] = None
+
+    async def _keep_typing(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(8.0)
+                await self._client._rest_request(
+                    "POST", f"/channels/{self._channel_id}/typing"
+                )
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def __aenter__(self) -> "_BotTypingContext":
+        try:
+            await self._client._rest_request(
+                "POST", f"/channels/{self._channel_id}/typing"
+            )
+        except Exception:
+            pass
+        self._task = asyncio.create_task(self._keep_typing())
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
+class BotChannel:
+    def __init__(
+        self,
+        client: "OfficialDiscordBotClient",
+        channel_id: int,
+        name: str = "",
+        guild: Optional["BotGuild"] = None,
+        is_dm: bool = False,
+        recipient: Optional[BotUser] = None,
+    ) -> None:
+        self._client = client
+        self.id = int(channel_id)
+        self.name = name or str(channel_id)
+        self.guild = guild
+        self.is_dm = bool(is_dm)
+        self.recipient = recipient
+
+    def typing(self) -> _BotTypingContext:
+        return _BotTypingContext(self._client, self.id)
+
+    async def send(
+        self,
+        content: Optional[str] = None,
+        *,
+        file: Optional[Any] = None,
+        allowed_mentions: Optional[Any] = None,
+        reference_message_id: Optional[int] = None,
+        mention_author: bool = False,
+    ) -> Optional["BotMessage"]:
+        payload: Dict[str, Any] = {}
+        if content is not None and str(content):
+            payload["content"] = str(content)
+        if allowed_mentions is not None:
+            if hasattr(allowed_mentions, "to_dict"):
+                am_dict = allowed_mentions.to_dict()
+            else:
+                parse: List[str] = []
+                if getattr(allowed_mentions, "everyone", False):
+                    parse.append("everyone")
+                if getattr(allowed_mentions, "roles", False):
+                    parse.append("roles")
+                if getattr(allowed_mentions, "users", False):
+                    parse.append("users")
+                am_dict = {
+                    "parse": parse,
+                    "replied_user": bool(getattr(allowed_mentions, "replied_user", True)),
+                }
+            if reference_message_id is not None:
+                am_dict["replied_user"] = bool(mention_author)
+            payload["allowed_mentions"] = am_dict
+        elif reference_message_id is not None:
+            payload["allowed_mentions"] = {"replied_user": bool(mention_author)}
+
+        if reference_message_id is not None:
+            payload["message_reference"] = {
+                "message_id": str(reference_message_id),
+                "fail_if_not_exists": True,
+            }
+
+        data = await self._client._rest_send_message(self.id, payload, file=file)
+        if isinstance(data, dict) and data.get("id"):
+            return self._client._parse_message(data, channel_hint=self)
+        return None
+
+    async def fetch_message(self, message_id: int) -> "BotMessage":
+        data = await self._client._rest_request(
+            "GET", f"/channels/{self.id}/messages/{int(message_id)}"
+        )
+        return self._client._parse_message(data, channel_hint=self)
+
+    async def history(self, limit: int = 10) -> Any:
+        lim = max(1, min(100, int(limit)))
+        data = await self._client._rest_request(
+            "GET", f"/channels/{self.id}/messages", params={"limit": str(lim)}
+        )
+        if isinstance(data, list):
+            for raw in data:
+                if isinstance(raw, dict):
+                    yield self._client._parse_message(raw, channel_hint=self)
+
+
+class BotDMChannel(BotChannel):
+    def __init__(
+        self,
+        client: "OfficialDiscordBotClient",
+        channel_id: int,
+        recipient: Optional[BotUser] = None,
+    ) -> None:
+        super().__init__(
+            client,
+            channel_id,
+            name=(recipient.display_name if recipient else str(channel_id)),
+            guild=None,
+            is_dm=True,
+            recipient=recipient,
+        )
+
+
+class BotGuild:
+    def __init__(self, client: "OfficialDiscordBotClient", data: Dict[str, Any]) -> None:
+        self._client = client
+        self.id: int = int(data.get("id") or 0)
+        self.name: str = str(data.get("name") or f"Guild {self.id}")
+        self.roles: Dict[int, BotRole] = {
+            int(r["id"]): BotRole(int(r["id"]), str(r.get("name") or ""))
+            for r in (data.get("roles") or [])
+            if isinstance(r, dict) and r.get("id")
+        }
+        self._channels: Dict[int, BotChannel] = {}
+        self._members: Dict[int, BotUser] = {}
+        self.me: Optional[BotUser] = client.user
+
+        for ch in (data.get("channels") or []):
+            if isinstance(ch, dict) and ch.get("id"):
+                ctype = int(ch.get("type", 0))
+                if ctype in {0, 5, 10, 11, 12}:
+                    cobj = BotChannel(
+                        client,
+                        int(ch["id"]),
+                        name=str(ch.get("name") or ch["id"]),
+                        guild=self,
+                        is_dm=False,
+                    )
+                    self._channels[cobj.id] = cobj
+
+        for mem in (data.get("members") or []):
+            if isinstance(mem, dict) and isinstance(mem.get("user"), dict):
+                u = BotUser(mem["user"], nick=mem.get("nick"))
+                self._members[u.id] = u
+                if client.user and u.id == client.user.id:
+                    self.me = u
+
+    @property
+    def text_channels(self) -> List[BotChannel]:
+        return list(self._channels.values())
+
+    def get_member(self, user_id: int) -> Optional[BotUser]:
+        return self._members.get(int(user_id))
+
+
+class BotMessage:
+    def __init__(
+        self,
+        client: "OfficialDiscordBotClient",
+        data: Dict[str, Any],
+        channel: BotChannel,
+        guild: Optional[BotGuild],
+    ) -> None:
+        self._client = client
+        self.id: int = int(data.get("id") or 0)
+        self.content: str = str(data.get("content") or "")
+        self.channel: BotChannel = channel
+        self.guild: Optional[BotGuild] = guild
+
+        member_obj = data.get("member") if isinstance(data.get("member"), dict) else {}
+        author_raw = data.get("author") if isinstance(data.get("author"), dict) else {}
+        self.author: BotUser = BotUser(author_raw, nick=member_obj.get("nick"))
+        if guild is not None and self.author.id:
+            cached_m = guild.get_member(self.author.id)
+            if cached_m is not None and cached_m.activities:
+                self.author.activities = cached_m.activities
+            guild._members[self.author.id] = self.author
+
+        self.mention_everyone: bool = bool(data.get("mention_everyone", False))
+        self.mentions: List[BotUser] = [
+            BotUser(u) for u in (data.get("mentions") or []) if isinstance(u, dict)
+        ]
+        self.role_mentions: List[BotRole] = []
+        for rid in (data.get("mention_roles") or []):
+            if str(rid).isdigit():
+                r_int = int(rid)
+                role_obj = guild.roles.get(r_int) if guild else None
+                self.role_mentions.append(role_obj or BotRole(r_int))
+
+        self.channel_mentions: List[BotChannel] = []
+        for cid_str in re.findall(r"<#(\d{15,22})>", self.content):
+            ch_obj = client.get_channel(int(cid_str))
+            if ch_obj is not None:
+                self.channel_mentions.append(ch_obj)
+
+        self.attachments: List[BotAttachment] = [
+            BotAttachment(a) for a in (data.get("attachments") or []) if isinstance(a, dict)
+        ]
+        self.embeds: List[BotEmbed] = [
+            BotEmbed(e) for e in (data.get("embeds") or []) if isinstance(e, dict)
+        ]
+        self.stickers: List[BotSticker] = [
+            BotSticker(s) for s in (data.get("sticker_items") or []) if isinstance(s, dict)
+        ]
+        self.flags = BotMessageFlags(int(data.get("flags") or 0))
+
+        self.reference: Optional[BotMessageReference] = None
+        ref_raw = data.get("message_reference")
+        if isinstance(ref_raw, dict) and ref_raw.get("message_id"):
+            ref_msg_raw = data.get("referenced_message")
+            resolved = (
+                client._parse_message(ref_msg_raw, channel_hint=channel)
+                if isinstance(ref_msg_raw, dict) and ref_msg_raw.get("id")
+                else None
+            )
+            self.reference = BotMessageReference(int(ref_raw["message_id"]), resolved=resolved)
+
+    async def reply(
+        self,
+        content: Optional[str] = None,
+        *,
+        file: Optional[Any] = None,
+        mention_author: bool = False,
+        allowed_mentions: Optional[Any] = None,
+    ) -> Optional["BotMessage"]:
+        return await self.channel.send(
+            content,
+            file=file,
+            allowed_mentions=allowed_mentions,
+            reference_message_id=self.id,
+            mention_author=mention_author,
+        )
+
+
+class BotDeletedMessage:
+    def __init__(self, msg_id: int, channel: BotChannel) -> None:
+        self.id = int(msg_id)
+        self.channel = channel
+
+
+_HTTP_EXC_TYPES: Tuple[type, ...] = (
+    (discord.HTTPException, BotAPIError) if discord is not None else (BotAPIError,)
+)
+_LOGIN_EXC_TYPES: Tuple[type, ...] = (
+    (discord.LoginFailure, BotAuthError) if discord is not None else (BotAuthError,)
+)
+
+
+def _is_dm_channel(ch: Any) -> bool:
+    if isinstance(ch, BotDMChannel) or bool(getattr(ch, "is_dm", False)):
+        return True
+    if discord is not None and isinstance(ch, discord.DMChannel):
+        return True
+    return False
+
+
+def _is_message_obj(obj: Any) -> bool:
+    if isinstance(obj, BotMessage):
+        return True
+    if discord is not None and isinstance(obj, discord.Message):
+        return True
+    return False
+
+
+def _make_allowed_mentions(
+    *,
+    is_official_bot: bool = False,
+    everyone: bool = False,
+    roles: bool = False,
+    users: bool = False,
+    replied_user: bool = True,
+) -> Any:
+    if is_official_bot or discord is None:
+        return BotAllowedMentions(
+            everyone=everyone, roles=roles, users=users, replied_user=replied_user
+        )
+    return discord.AllowedMentions(
+        everyone=everyone, roles=roles, users=users, replied_user=replied_user
+    )
+
+
+def _make_discord_file(path: str, filename: str, is_official_bot: bool = False) -> Any:
+    if is_official_bot or discord is None:
+        return BotFile(path, filename=filename)
+    return discord.File(path, filename=filename)
+
+
+_BOT_ACTIVITY_TYPE_CODES = {
+    "playing": 0,
+    "listening": 2,
+    "watching": 3,
+    "competing": 5,
+}
+
+# ==============================================================================
+# ОБЩАЯ ЛОГИКА DISCORD-КЛИЕНТА (SELFBOT + OFFICIAL DISCORD BOT)
+# ==============================================================================
+class _DiscordBotLogicMixin:
+    is_official_bot: bool = False
+
+    def _init_bot_logic(self, manager: "BotManager") -> None:
         self.manager = manager
         self.logger = manager.logger
-        self._allowed_mentions = discord.AllowedMentions(
+        self._allowed_mentions = _make_allowed_mentions(
+            is_official_bot=self.is_official_bot,
             everyone=False,
             roles=False,
             users=False,
@@ -4234,7 +4715,7 @@ class DiscordSelfBot(discord.Client):
         task.add_done_callback(self._bg_tasks.discard)
         return task
 
-    async def close(self) -> None:
+    def _cancel_logic_tasks(self) -> None:
         for burst in list(self._pending_bursts.values()):
             if burst.timer_task and not burst.timer_task.done():
                 burst.timer_task.cancel()
@@ -4242,7 +4723,6 @@ class DiscordSelfBot(discord.Client):
         for task in list(self._bg_tasks):
             task.cancel()
         self._bg_tasks.clear()
-        await super().close()
 
     def cleanup_stale_state(self) -> None:
         now = time.monotonic()
@@ -4268,7 +4748,7 @@ class DiscordSelfBot(discord.Client):
             self._last_channel_author.clear()
 
     def _channel_label(self, channel: Any) -> str:
-        if isinstance(channel, discord.DMChannel):
+        if _is_dm_channel(channel):
             return "ЛС"
         name = getattr(channel, "name", None) or str(getattr(channel, "id", "?"))
         guild = getattr(channel, "guild", None)
@@ -4292,7 +4772,8 @@ class DiscordSelfBot(discord.Client):
         assert self.user is not None
         self.manager.discord_status = "online"
         self.manager.discord_error = ""
-        self.logger.info("Авторизован в Discord как %s (ID: %s)", self.user, self.user.id)
+        mode_lbl = "Discord Bot" if self.is_official_bot else "Selfbot"
+        self.logger.info("Авторизован в Discord [%s] как %s (ID: %s)", mode_lbl, self.user, self.user.id)
         self.manager.notify_state_changed()
 
     async def on_message(self, message: discord.Message) -> None:
@@ -4305,7 +4786,7 @@ class DiscordSelfBot(discord.Client):
         if message.author.id == self.user.id:
             return
 
-        is_dm = isinstance(message.channel, discord.DMChannel)
+        is_dm = _is_dm_channel(message.channel)
         if not is_dm:
             self._last_channel_author[message.channel.id] = message.author.id
 
@@ -4571,7 +5052,7 @@ class DiscordSelfBot(discord.Client):
                     if not reply_text:
                         return
                     await asyncio.sleep(random.uniform(0.4, 1.0))
-            except discord.HTTPException as exc:
+            except _HTTP_EXC_TYPES as exc:
                 self._handle_http_error(exc, cached.channel_id)
                 return
 
@@ -4589,7 +5070,7 @@ class DiscordSelfBot(discord.Client):
                         m.replies_server += 1
                         self._last_replied_user_by_channel[cached.channel_id] = cached.author_id
                     m.notify_state_changed()
-                except discord.HTTPException as exc:
+                except _HTTP_EXC_TYPES as exc:
                     self._handle_http_error(exc, cached.channel_id)
                     return
 
@@ -4628,12 +5109,12 @@ class DiscordSelfBot(discord.Client):
         ref = message.reference
         if not ref:
             return None
-        if isinstance(ref.resolved, discord.Message):
+        if _is_message_obj(ref.resolved):
             return ref.resolved
         if ref.message_id:
             try:
                 return await message.channel.fetch_message(ref.message_id)
-            except discord.HTTPException:
+            except _HTTP_EXC_TYPES:
                 return None
         return None
 
@@ -4864,7 +5345,7 @@ class DiscordSelfBot(discord.Client):
                 collected.append(f"{label}: {formatted[:240]}")
                 if len(collected) >= limit:
                     break
-        except discord.HTTPException:
+        except _HTTP_EXC_TYPES:
             return ""
         collected.reverse()
         return "\n".join(collected)
@@ -5007,7 +5488,7 @@ class DiscordSelfBot(discord.Client):
                     await asyncio.sleep(
                         min(2.4, max(0.7, len(reply_text) / random.uniform(30.0, 48.0)))
                     )
-            except discord.HTTPException as exc:
+            except _HTTP_EXC_TYPES as exc:
                 self._handle_http_error(exc, target_msg.channel.id)
                 return
         else:
@@ -5055,7 +5536,7 @@ class DiscordSelfBot(discord.Client):
                 gif_hint = (
                     "например [GIF: cute anime happy] или [GIF: shy blush]"
                     if not is_dm
-                    else "например [GIF: shrek thumbs up] или [GIF: ok boss]"
+                    else "например [GIF: thumbs up] или [GIF: ok boss]"
                 )
                 if explicit_gif_req:
                     system_content += (
@@ -5210,7 +5691,7 @@ class DiscordSelfBot(discord.Client):
                     gen_elapsed = time.monotonic() - gen_start
                     target_time = min(4.5, len(preview_clean) / random.uniform(28.0, 45.0))
                     await asyncio.sleep(max(0.2, target_time - gen_elapsed))
-            except discord.HTTPException as exc:
+            except _HTTP_EXC_TYPES as exc:
                 self._handle_http_error(exc, target_msg.channel.id)
                 return
 
@@ -5299,7 +5780,7 @@ class DiscordSelfBot(discord.Client):
 
         # Если человек прямо попросил гифку, но модель забыла тег — подставляем запрос сами
         if cfg.gifs_enabled and explicit_gif_req and (not meme_path) and (not gif_query):
-            gif_query = _normalize_gif_query_for_giphy(formatted_input) if not is_dm else "shrek funny"
+            gif_query = _normalize_gif_query_for_giphy(formatted_input) if not is_dm else "funny reaction"
 
         gif_url: Optional[str] = None
         gif_source = ""
@@ -5354,7 +5835,7 @@ class DiscordSelfBot(discord.Client):
                 try:
                     if reply_text:
                         await asyncio.sleep(random.uniform(0.4, 1.0))
-                    dfile = discord.File(meme_path, filename=meme_name or os.path.basename(meme_path))
+                    dfile = _make_discord_file(meme_path, meme_name or os.path.basename(meme_path), self.is_official_bot)
                     if (not reply_text) and allow_reply and force_reply:
                         try:
                             await target_msg.reply(
@@ -5362,10 +5843,10 @@ class DiscordSelfBot(discord.Client):
                                 mention_author=False,
                                 allowed_mentions=self._allowed_mentions,
                             )
-                        except discord.HTTPException as reply_exc:
+                        except _HTTP_EXC_TYPES as reply_exc:
                             if getattr(reply_exc, "status", None) in {400, 404}:
                                 await target_msg.channel.send(
-                                    file=discord.File(meme_path, filename=meme_name or os.path.basename(meme_path)),
+                                    file=_make_discord_file(meme_path, meme_name or os.path.basename(meme_path), self.is_official_bot),
                                     allowed_mentions=self._allowed_mentions,
                                 )
                             else:
@@ -5376,7 +5857,7 @@ class DiscordSelfBot(discord.Client):
                         )
                     m.memes_sent += 1
                     self.logger.info("Отправлен локальный мем: %s", meme_name)
-                except discord.HTTPException as exc:
+                except _HTTP_EXC_TYPES as exc:
                     self._handle_http_error(exc, target_msg.channel.id)
                     if not reply_text:
                         sent_ok = False
@@ -5392,7 +5873,7 @@ class DiscordSelfBot(discord.Client):
                                 mention_author=False,
                                 allowed_mentions=self._allowed_mentions,
                             )
-                        except discord.HTTPException as reply_exc:
+                        except _HTTP_EXC_TYPES as reply_exc:
                             if getattr(reply_exc, "status", None) in {400, 404}:
                                 await target_msg.channel.send(
                                     gif_url, allowed_mentions=self._allowed_mentions
@@ -5405,7 +5886,7 @@ class DiscordSelfBot(discord.Client):
                         )
                     m.gifs_sent += 1
                     self.logger.info("Отправлена GIF [%s] (%r)", gif_source or "API", gif_query)
-                except discord.HTTPException as exc:
+                except _HTTP_EXC_TYPES as exc:
                     self._handle_http_error(exc, target_msg.channel.id)
                     if not reply_text and not meme_path:
                         sent_ok = False
@@ -5515,7 +5996,7 @@ class DiscordSelfBot(discord.Client):
                         await message.reply(
                             chunk, mention_author=False, allowed_mentions=self._allowed_mentions
                         )
-                    except discord.HTTPException as reply_exc:
+                    except _HTTP_EXC_TYPES as reply_exc:
                         if getattr(reply_exc, "status", None) in {400, 404}:
                             await message.channel.send(
                                 chunk, allowed_mentions=self._allowed_mentions
@@ -5524,7 +6005,7 @@ class DiscordSelfBot(discord.Client):
                             raise
                 else:
                     await message.channel.send(chunk, allowed_mentions=self._allowed_mentions)
-            except discord.HTTPException as exc:
+            except _HTTP_EXC_TYPES as exc:
                 self._handle_http_error(exc, message.channel.id)
                 return idx > 0
         return True
@@ -5566,6 +6047,400 @@ class DiscordSelfBot(discord.Client):
             self.logger.exception("Ошибка обновления досье для %s", user_id)
 
 
+
+
+class DiscordSelfBot(_DiscordBotLogicMixin, _DISCORD_BASE_CLIENT):
+    """Клиент личного аккаунта Discord (Selfbot через discord.py-self)."""
+
+    is_official_bot: bool = False
+
+    def __init__(self, manager: "BotManager") -> None:
+        if discord is None:
+            raise RuntimeError("Для режима Selfbot требуется библиотека discord.py-self.")
+        super().__init__()
+        self._init_bot_logic(manager)
+
+    async def close(self) -> None:
+        self._cancel_logic_tasks()
+        await super().close()
+
+
+class OfficialDiscordBotClient(_DiscordBotLogicMixin):
+    """Нативный асинхронный клиент официального Discord-бота (Gateway v10 + REST v10 на aiohttp)."""
+
+    is_official_bot: bool = True
+    API_BASE = "https://discord.com/api/v10"
+    USER_AGENT = "DiscordBot (https://github.com/qume1i/SelfBot-Studio, 2.0)"
+    # GUILDS (1<<0) | GUILD_MESSAGES (1<<9) | DIRECT_MESSAGES (1<<12) | MESSAGE_CONTENT (1<<15)
+    DEFAULT_INTENTS = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15)
+
+    def __init__(self, manager: "BotManager") -> None:
+        self._init_bot_logic(manager)
+        self.user: Optional[BotUser] = None
+        self._token: str = ""
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._closed: bool = False
+        self._heartbeat_task: Optional[asyncio.Task[Any]] = None
+        self._last_seq: Optional[int] = None
+        self._session_id: Optional[str] = None
+        self._resume_url: Optional[str] = None
+        self._guilds_map: Dict[int, BotGuild] = {}
+        self._channels_map: Dict[int, BotChannel] = {}
+
+    @property
+    def guilds(self) -> List[BotGuild]:
+        return list(self._guilds_map.values())
+
+    def is_closed(self) -> bool:
+        return self._closed
+
+    def get_channel(self, channel_id: int) -> Optional[BotChannel]:
+        cid = int(channel_id)
+        if cid in self._channels_map:
+            return self._channels_map[cid]
+        for g in self._guilds_map.values():
+            if cid in g._channels:
+                return g._channels[cid]
+        return None
+
+    async def fetch_channel(self, channel_id: int) -> Optional[BotChannel]:
+        cid = int(channel_id)
+        data = await self._rest_request("GET", f"/channels/{cid}")
+        if not isinstance(data, dict) or not data.get("id"):
+            return None
+        ctype = int(data.get("type", 0))
+        if ctype in {1, 3}:
+            recips = data.get("recipients") or []
+            recip = BotUser(recips[0]) if recips and isinstance(recips[0], dict) else None
+            ch: BotChannel = BotDMChannel(self, cid, recipient=recip)
+        else:
+            gid = int(data["guild_id"]) if data.get("guild_id") else None
+            guild = self._guilds_map.get(gid) if gid else None
+            ch = BotChannel(self, cid, name=str(data.get("name") or cid), guild=guild, is_dm=False)
+            if guild is not None:
+                guild._channels[cid] = ch
+        self._channels_map[cid] = ch
+        return ch
+
+    def _auth_headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bot {self._token}",
+            "User-Agent": self.USER_AGENT,
+        }
+
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=30.0)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
+
+    async def _rest_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, str]] = None,
+    ) -> Any:
+        sess = await self._ensure_session()
+        url = f"{self.API_BASE}{path}"
+        headers = self._auth_headers()
+        if json_body is not None:
+            headers["Content-Type"] = "application/json"
+        async with sess.request(method, url, headers=headers, json=json_body, params=params) as resp:
+            text = await resp.text()
+            if resp.status == 401:
+                raise BotAuthError("Неверный токен Discord-бота (HTTP 401 Unauthorized).")
+            if resp.status >= 400:
+                raise BotAPIError(resp.status, text[:240], dict(resp.headers))
+            if not text or resp.status == 204:
+                return None
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return None
+
+    async def _rest_send_message(
+        self,
+        channel_id: int,
+        payload: Dict[str, Any],
+        file: Optional[Any] = None,
+    ) -> Any:
+        if file is None:
+            return await self._rest_request("POST", f"/channels/{channel_id}/messages", json_body=payload)
+
+        sess = await self._ensure_session()
+        url = f"{self.API_BASE}/channels/{channel_id}/messages"
+        fpath = getattr(file, "path", "")
+        fname = getattr(file, "filename", "") or os.path.basename(fpath) or "file.bin"
+        raw_bytes = await asyncio.to_thread(_read_file_bytes, fpath)
+        ctype = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+
+        form = aiohttp.FormData()
+        form.add_field(
+            "payload_json",
+            json.dumps(payload, ensure_ascii=False),
+            content_type="application/json",
+        )
+        form.add_field("files[0]", raw_bytes, filename=fname, content_type=ctype)
+        async with sess.post(url, headers=self._auth_headers(), data=form) as resp:
+            text = await resp.text()
+            if resp.status == 401:
+                raise BotAuthError("Неверный токен Discord-бота (HTTP 401 Unauthorized).")
+            if resp.status >= 400:
+                raise BotAPIError(resp.status, text[:240], dict(resp.headers))
+            try:
+                return json.loads(text) if text else None
+            except json.JSONDecodeError:
+                return None
+
+    def _build_presence_payload(self) -> Dict[str, Any]:
+        cfg = self.manager.config
+        st = cfg.bot_status if cfg.bot_status in {"online", "idle", "dnd", "invisible"} else "online"
+        act_text = (cfg.bot_activity_text or "").strip()[:128]
+        act_code = _BOT_ACTIVITY_TYPE_CODES.get(cfg.bot_activity_type, 2)
+        activities = [{"name": act_text, "type": act_code}] if act_text else []
+        return {
+            "since": None,
+            "activities": activities,
+            "status": st,
+            "afk": False,
+        }
+
+    async def update_presence(self) -> bool:
+        if self._ws is None or self._ws.closed or self._closed:
+            return False
+        try:
+            await self._ws.send_json({"op": 3, "d": self._build_presence_payload()})
+            return True
+        except Exception:
+            return False
+
+    def _parse_message(
+        self, data: Dict[str, Any], channel_hint: Optional[BotChannel] = None
+    ) -> BotMessage:
+        cid = int(data.get("channel_id") or (channel_hint.id if channel_hint else 0))
+        gid = int(data["guild_id"]) if data.get("guild_id") else None
+        guild = self._guilds_map.get(gid) if gid else (channel_hint.guild if channel_hint else None)
+        ch = channel_hint or self.get_channel(cid)
+        if ch is None:
+            if gid is None:
+                author_raw = data.get("author") if isinstance(data.get("author"), dict) else {}
+                recip = BotUser(author_raw) if author_raw.get("id") else None
+                ch = BotDMChannel(self, cid, recipient=recip)
+            else:
+                ch = BotChannel(self, cid, name=str(cid), guild=guild, is_dm=False)
+                if guild is not None:
+                    guild._channels[cid] = ch
+            self._channels_map[cid] = ch
+        return BotMessage(self, data, ch, guild)
+
+    async def _heartbeat_loop(self, ws: aiohttp.ClientWebSocketResponse, interval_sec: float) -> None:
+        try:
+            await asyncio.sleep(interval_sec * random.uniform(0.15, 0.85))
+            while not self._closed and not ws.closed:
+                await ws.send_json({"op": 1, "d": self._last_seq})
+                await asyncio.sleep(interval_sec)
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def start(self, token: str) -> None:
+        tok = (token or "").strip()
+        if tok.lower().startswith("bot "):
+            tok = tok[4:].strip()
+        self._token = tok
+        self._closed = False
+
+        gw_info = await self._rest_request("GET", "/gateway/bot")
+        base_gw_url = (
+            str(gw_info.get("url") or "wss://gateway.discord.gg")
+            if isinstance(gw_info, dict)
+            else "wss://gateway.discord.gg"
+        )
+        backoff = 2.0
+
+        while not self._closed:
+            ws_base = (self._resume_url or base_gw_url).rstrip("/")
+            ws_url = f"{ws_base}/?v=10&encoding=json"
+            sess = await self._ensure_session()
+            try:
+                async with sess.ws_connect(ws_url, max_msg_size=0, heartbeat=None) as ws:
+                    self._ws = ws
+                    backoff = 2.0
+                    async for ws_msg in ws:
+                        if self._closed:
+                            break
+                        if ws_msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                pkt = json.loads(ws_msg.data)
+                            except json.JSONDecodeError:
+                                continue
+                            await self._handle_gateway_packet(ws, pkt)
+                        elif ws_msg.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                            break
+                    close_code = ws.close_code
+            except (BotAuthError, asyncio.CancelledError):
+                raise
+            except Exception as exc:
+                if self._closed:
+                    break
+                self.logger.warning("Gateway Bot разрыв (%s). Переподключение через %.0fс...", exc, backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(30.0, backoff * 1.7)
+                continue
+            finally:
+                if self._heartbeat_task and not self._heartbeat_task.done():
+                    self._heartbeat_task.cancel()
+                    try:
+                        await self._heartbeat_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                self._heartbeat_task = None
+                self._ws = None
+
+            if self._closed:
+                break
+            if close_code == 4004:
+                raise BotAuthError(
+                    "Неверный Bot Token (Gateway 4004). Скопируйте свежий токен из Discord Developer Portal."
+                )
+            if close_code == 4014:
+                raise RuntimeError(
+                    "Отклонён Intents (4014): включите Message Content Intent в Discord Developer Portal → Bot → Privileged Gateway Intents."
+                )
+            if close_code in {4010, 4011, 4012, 4013}:
+                raise RuntimeError(f"Критическая ошибка Gateway Discord ({close_code}).")
+            if close_code in {4007, 4009}:
+                self._session_id = None
+                self._resume_url = None
+                self._last_seq = None
+
+            self.logger.warning("Gateway Bot закрыт (code=%s). Переподключение через %.0fс...", close_code, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(30.0, backoff * 1.7)
+
+    async def _handle_gateway_packet(
+        self, ws: aiohttp.ClientWebSocketResponse, pkt: Dict[str, Any]
+    ) -> None:
+        op = pkt.get("op")
+        seq = pkt.get("s")
+        if isinstance(seq, int):
+            self._last_seq = seq
+        d = pkt.get("d")
+        t = pkt.get("t")
+
+        if op == 10 and isinstance(d, dict):
+            interval_ms = int(d.get("heartbeat_interval") or 41250)
+            if self._heartbeat_task and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+            self._heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(ws, max(5.0, interval_ms / 1000.0))
+            )
+            if self._session_id and self._last_seq is not None:
+                await ws.send_json(
+                    {
+                        "op": 6,
+                        "d": {
+                            "token": self._token,
+                            "session_id": self._session_id,
+                            "seq": self._last_seq,
+                        },
+                    }
+                )
+            else:
+                await ws.send_json(
+                    {
+                        "op": 2,
+                        "d": {
+                            "token": self._token,
+                            "intents": self.DEFAULT_INTENTS,
+                            "properties": {
+                                "os": sys.platform,
+                                "browser": "SelfbotStudio",
+                                "device": "SelfbotStudio",
+                            },
+                            "presence": self._build_presence_payload(),
+                        },
+                    }
+                )
+        elif op == 1:
+            await ws.send_json({"op": 1, "d": self._last_seq})
+        elif op == 7:
+            await ws.close(code=4000)
+        elif op == 9:
+            resumable = bool(d)
+            if not resumable:
+                self._session_id = None
+                self._resume_url = None
+                self._last_seq = None
+            await asyncio.sleep(random.uniform(1.5, 4.0))
+            await ws.close(code=4000)
+        elif op == 0 and isinstance(d, dict):
+            await self._dispatch_event(str(t or ""), d)
+
+    async def _dispatch_event(self, event_name: str, data: Dict[str, Any]) -> None:
+        if event_name == "READY":
+            user_raw = data.get("user")
+            if isinstance(user_raw, dict):
+                self.user = BotUser(user_raw)
+            self._session_id = str(data.get("session_id") or "") or None
+            self._resume_url = str(data.get("resume_gateway_url") or "") or None
+            await self.on_ready()
+        elif event_name == "GUILD_CREATE":
+            g = BotGuild(self, data)
+            self._guilds_map[g.id] = g
+            for ch in g.text_channels:
+                self._channels_map[ch.id] = ch
+            self.manager.notify_state_changed()
+        elif event_name == "GUILD_DELETE":
+            gid = int(data.get("id") or 0)
+            g = self._guilds_map.pop(gid, None)
+            if g is not None:
+                for cid in list(g._channels.keys()):
+                    self._channels_map.pop(cid, None)
+            self.manager.notify_state_changed()
+        elif event_name in {"CHANNEL_CREATE", "CHANNEL_UPDATE"}:
+            cid = int(data.get("id") or 0)
+            gid = int(data["guild_id"]) if data.get("guild_id") else None
+            ctype = int(data.get("type", 0))
+            if gid and gid in self._guilds_map and ctype in {0, 5, 10, 11, 12}:
+                g = self._guilds_map[gid]
+                ch = BotChannel(self, cid, name=str(data.get("name") or cid), guild=g, is_dm=False)
+                g._channels[cid] = ch
+                self._channels_map[cid] = ch
+        elif event_name == "CHANNEL_DELETE":
+            cid = int(data.get("id") or 0)
+            ch = self._channels_map.pop(cid, None)
+            if ch and ch.guild:
+                ch.guild._channels.pop(cid, None)
+        elif event_name == "MESSAGE_CREATE":
+            msg = self._parse_message(data)
+            self._spawn_bg(self.on_message(msg))
+        elif event_name == "MESSAGE_DELETE":
+            mid = int(data.get("id") or 0)
+            cid = int(data.get("channel_id") or 0)
+            if mid and cid:
+                ch = self.get_channel(cid) or BotChannel(self, cid, is_dm=not bool(data.get("guild_id")))
+                self._spawn_bg(self.on_message_delete(BotDeletedMessage(mid, ch)))
+
+    async def close(self) -> None:
+        self._closed = True
+        self._cancel_logic_tasks()
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+        if self._ws and not self._ws.closed:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+        if self._session and not self._session.closed:
+            try:
+                await self._session.close()
+            except Exception:
+                pass
+
+
 # ==============================================================================
 # ГЛАВНЫЙ МЕНЕДЖЕР (SSE + DPAPI + MEMES + PRESETS/OVERRIDES + ANALYTICS + UI THEME)
 # ==============================================================================
@@ -5602,10 +6477,12 @@ class BotManager:
         self.diagnostics.on_record = self.web_panel.broadcast_diagnostic
         self.timeline.on_record = self.web_panel.broadcast_activity
 
-        self.bot: Optional[DiscordSelfBot] = None
+        self.bot: Optional[Any] = None
         self._bot_task: Optional[asyncio.Task[Any]] = None
         self._connect_lock = asyncio.Lock()
+        self.discord_mode: str = "bot" if config.discord_mode == "bot" else "selfbot"
         self.discord_token: str = config.discord_token
+        self.discord_bot_token: str = config.discord_bot_token
         self.discord_status: str = "no_token"
         self.discord_error: str = ""
 
@@ -5647,6 +6524,10 @@ class BotManager:
     def total_replies(self) -> int:
         return self.replies_dm + self.replies_server
 
+    @property
+    def active_discord_token(self) -> str:
+        return self.discord_bot_token if self.discord_mode == 'bot' else self.discord_token
+
     def _on_llm_model_autoswitched(self, _new_model: str) -> None:
         try:
             loop = asyncio.get_running_loop()
@@ -5672,7 +6553,7 @@ class BotManager:
             lbl = override.get("label") or f"{override['scope_type']}:{override['target_id']}"
             return str(override["prompt"]), f"OVR/{lbl[:16]}"
         if is_dm:
-            return self.dm_system_prompt, "ЛС/Шрекучка"
+            return self.dm_system_prompt, "ЛС/Помощник"
         return self.server_system_prompt, "SRV/Каваи"
 
     async def build_state_payload(self) -> Dict[str, Any]:
@@ -5696,14 +6577,29 @@ class BotManager:
                 "tray_running": self.tray.running,
             },
             "discord": {
+                "mode": self.discord_mode,
+                "is_bot_mode": self.discord_mode == "bot",
+                "selfbot_lib_available": _DISCORD_SELFBOT_INSTALLED,
                 "status": "online" if is_online else self.discord_status,
                 "online": is_online,
                 "error": self.discord_error,
-                "has_token": bool(self.discord_token),
-                "token_masked": mask_secret(self.discord_token),
+                "has_token": bool(self.active_discord_token),
+                "token_masked": mask_secret(self.active_discord_token),
+                "has_selfbot_token": bool(self.discord_token),
+                "selfbot_token_masked": mask_secret(self.discord_token),
+                "has_bot_token": bool(self.discord_bot_token),
+                "bot_token_masked": mask_secret(self.discord_bot_token),
                 "username": str(bot_user) if bot_user else "",
                 "user_id": str(bot_user.id) if bot_user else "",
                 "guilds_count": len(getattr(self.bot, "guilds", [])) if is_online else 0,
+                "invite_url": (
+                    f"https://discord.com/oauth2/authorize?client_id={bot_user.id}&permissions=274878221376&scope=bot"
+                    if (is_online and self.discord_mode == "bot" and bot_user is not None)
+                    else ""
+                ),
+                "bot_status": c.bot_status,
+                "bot_activity_type": c.bot_activity_type,
+                "bot_activity_text": c.bot_activity_text,
             },
             "bot": {
                 "active": self.active,
@@ -6088,7 +6984,7 @@ class BotManager:
                     ch = None
             if ch is not None:
                 try:
-                    await ch.send(announce, allowed_mentions=discord.AllowedMentions.none())
+                    await ch.send(announce, allowed_mentions=_make_allowed_mentions(is_official_bot=bool(getattr(self.bot, 'is_official_bot', False)), everyone=False, roles=False, users=False, replied_user=False))
                     sent = True
                 except Exception as exc:
                     self.logger.warning("Не удалось отправить старт игры в канал %s: %s", channel_id, exc)
@@ -6122,7 +7018,7 @@ class BotManager:
                 ch_marked_dm.add(cid)
             elif self.bot is not None:
                 ch_obj = self.bot.get_channel(cid)
-                if isinstance(ch_obj, discord.DMChannel):
+                if _is_dm_channel(ch_obj):
                     dm_ch_ids.add(cid)
 
         filtered: List[Dict[str, Any]] = []
@@ -6312,6 +7208,9 @@ class BotManager:
                 "cooldown_max": c.cooldown_max,
                 "channel_cooldown_min": c.channel_cooldown_min,
                 "channel_cooldown_max": c.channel_cooldown_max,
+                "bot_status": c.bot_status,
+                "bot_activity_type": c.bot_activity_type,
+                "bot_activity_text": c.bot_activity_text,
             },
             "bot_behavior": {
                 "reply_in_dms": self.reply_in_dms,
@@ -6549,6 +7448,8 @@ class BotManager:
 
         url = await self.web_panel.start()
         self.logger.info("Веб-панель %s запущена (SSE Live): %s", self.ui_theme["brand_title"], url)
+        if self.config.hide_console and os.environ.get("TERM_PROGRAM", "").lower() != "vscode":
+            detach_python_console(True)
         if self.tray.start(url, asyncio.get_running_loop()):
             self.logger.info("Иконка в системном трее запущена.")
         self.logger.info("Рабочая папка файлов: %s (%s)", BASE_DIR, self.secret_box.mode_label)
@@ -6560,11 +7461,11 @@ class BotManager:
 
         self._init_llm_task = asyncio.create_task(self._initial_llm_check())
 
-        if self.discord_token:
-            await self.connect_discord(self.discord_token, save_token=False)
+        if self.active_discord_token:
+            await self.connect_discord(self.active_discord_token, save_token=False, mode=self.discord_mode)
         else:
             self.discord_status = "no_token"
-            self.logger.info("Токен Discord не задан. Введите его в веб-панели (%s).", url)
+            self.logger.info("Токен Discord (%s) не задан. Введите его в веб-панели (%s).", self.discord_mode, url)
             self.notify_state_changed()
 
         await self.hw.sample()
@@ -6621,7 +7522,7 @@ class BotManager:
                 if ch is not None:
                     try:
                         prefix = "Напоминаю: " if is_dm else f"<@{uid}>, напоминаю: "
-                        allowed = discord.AllowedMentions(everyone=False, roles=False, users=not is_dm)
+                        allowed = _make_allowed_mentions(is_official_bot=bool(getattr(self.bot, 'is_official_bot', False)), everyone=False, roles=False, users=not is_dm)
                         await ch.send(f"{prefix}{text}", allowed_mentions=allowed)
                         self.logger.info("[REMINDER #%d] Отправлено в %s: %s", rid, cid, text[:60])
                     except Exception as exc:
@@ -6649,35 +7550,124 @@ class BotManager:
                 self._last_compaction_mono = time.monotonic()
                 await self.compact_old_memory(max_threads=3)
 
-    async def connect_discord(self, token: str, save_token: bool = True) -> Tuple[bool, str]:
+    async def set_discord_mode(self, mode: str, auto_connect: bool = True) -> Tuple[bool, str]:
+        norm = "bot" if str(mode).strip().lower() == "bot" else "selfbot"
+        if norm == self.discord_mode:
+            return True, "Режим уже активен."
+        async with self._connect_lock:
+            await self._disconnect_discord_locked()
+            self.discord_mode = norm
+            self.config.discord_mode = norm
+            await self.memory.set_state("discord_mode", norm)
+            self.discord_error = ""
+            self.discord_status = "stopped" if self.active_discord_token else "no_token"
+            self.logger.info("Режим Discord переключён на: %s", "Discord Bot" if norm == "bot" else "Selfbot")
+            self.notify_state_changed()
+        if auto_connect and self.active_discord_token:
+            return await self.connect_discord(self.active_discord_token, save_token=False, mode=norm)
+        return True, "Режим переключён."
+
+    async def update_bot_presence(
+        self, status: str, activity_type: str, activity_text: str
+    ) -> Dict[str, Any]:
+        st = str(status or "online").strip().lower()
+        if st not in {"online", "idle", "dnd", "invisible"}:
+            st = "online"
+        at = str(activity_type or "listening").strip().lower()
+        if at not in _BOT_ACTIVITY_TYPE_CODES:
+            at = "listening"
+        txt = str(activity_text or "").strip()[:128]
+
+        self.config.bot_status = st
+        self.config.bot_activity_type = at
+        self.config.bot_activity_text = txt
+        await self.save_runtime_settings()
+
+        applied_live = False
+        if isinstance(self.bot, OfficialDiscordBotClient):
+            applied_live = await self.bot.update_presence()
+        self.logger.info("Статус Discord-бота обновлён: %s | %s %s", st, at, txt or "(пусто)")
+        return {
+            "ok": True,
+            "applied_live": applied_live,
+            "bot_status": st,
+            "bot_activity_type": at,
+            "bot_activity_text": txt,
+        }
+
+    async def connect_discord(
+        self, token: str, save_token: bool = True, mode: Optional[str] = None
+    ) -> Tuple[bool, str]:
         token = (token or "").strip().strip('"').strip("'")
+        if token.lower().startswith("bot "):
+            token = token[4:].strip()
+            if mode is None:
+                mode = "bot"
+
+        target_mode = (
+            ("bot" if str(mode).strip().lower() == "bot" else "selfbot")
+            if mode is not None
+            else self.discord_mode
+        )
         if not token:
             return False, "Токен не может быть пустым."
 
+        if target_mode == "selfbot":
+            if discord is None:
+                return (
+                    False,
+                    "Для режима Selfbot установите discord.py-self или переключитесь на режим Discord-бота (работает без него).",
+                )
+            if not _DISCORD_SELFBOT_INSTALLED:
+                return (
+                    False,
+                    "Установлен обычный discord.py вместо discord.py-self. Для Selfbot выполните: pip uninstall -y discord.py && pip install discord.py-self (или используйте режим Discord-бота).",
+                )
+
         async with self._connect_lock:
             await self._disconnect_discord_locked()
-            self.discord_token = token
-            if save_token:
-                await self.memory.set_state("discord_token", self.secret_box.protect(token))
+            self.discord_mode = target_mode
+            self.config.discord_mode = target_mode
+            await self.memory.set_state("discord_mode", target_mode)
+
+            if target_mode == "bot":
+                self.discord_bot_token = token
+                if save_token:
+                    await self.memory.set_state("discord_bot_token", self.secret_box.protect(token))
+            else:
+                self.discord_token = token
+                if save_token:
+                    await self.memory.set_state("discord_token", self.secret_box.protect(token))
 
             self.discord_status = "connecting"
             self.discord_error = ""
-            bot = DiscordSelfBot(self)
+            bot: Any = (
+                OfficialDiscordBotClient(self)
+                if target_mode == "bot"
+                else DiscordSelfBot(self)
+            )
             self.bot = bot
-            self._bot_task = asyncio.create_task(self._run_bot_task(bot, token))
-            self.logger.info("Подключение к Discord...")
+            self._bot_task = asyncio.create_task(self._run_bot_task(bot, token, target_mode))
+            self.logger.info(
+                "Подключение к Discord [%s]...",
+                "Discord Bot (Gateway v10)" if target_mode == "bot" else "Selfbot",
+            )
             self.notify_state_changed()
             return True, "Подключаюсь к Discord..."
 
-    async def _run_bot_task(self, bot: DiscordSelfBot, token: str) -> None:
+    async def _run_bot_task(self, bot: Any, token: str, mode: str) -> None:
         try:
             await bot.start(token)
-        except discord.LoginFailure:
+        except _LOGIN_EXC_TYPES as exc:
             if self.bot is bot:
                 self.discord_status = "error"
-                self.discord_error = "Неверный токен Discord (LoginFailure). Введите свежий токен."
+                self.discord_error = (
+                    str(exc)
+                    if mode == "bot" and str(exc)
+                    else "Неверный токен Discord (LoginFailure). Введите свежий токен."
+                )
                 self.notify_state_changed()
-            self.logger.error("Неверный токен Discord (LoginFailure).")
+            self.logger.error("Неверный токен Discord [%s]: %s", mode, exc)
         except asyncio.CancelledError:
             pass
         except Exception as exc:
@@ -6685,7 +7675,7 @@ class BotManager:
                 self.discord_status = "error"
                 self.discord_error = f"Ошибка подключения: {exc}"
                 self.notify_state_changed()
-            self.logger.exception("Сбой клиента Discord")
+            self.logger.exception("Сбой клиента Discord [%s]", mode)
         finally:
             try:
                 if not bot.is_closed():
@@ -6701,7 +7691,7 @@ class BotManager:
     async def disconnect_discord(self) -> None:
         async with self._connect_lock:
             await self._disconnect_discord_locked()
-            self.discord_status = "stopped" if self.discord_token else "no_token"
+            self.discord_status = "stopped" if self.active_discord_token else "no_token"
             self.discord_error = ""
             self.logger.info("Отключено от Discord.")
             self.notify_state_changed()
@@ -6723,14 +7713,20 @@ class BotManager:
             except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                 pass
 
-    async def forget_saved_token(self) -> None:
+    async def forget_saved_token(self, mode: Optional[str] = None) -> None:
+        target = mode if mode in {"bot", "selfbot"} else self.discord_mode
         async with self._connect_lock:
-            await self._disconnect_discord_locked()
-            self.discord_token = ""
-            await self.memory.delete_state("discord_token")
-            self.discord_status = "no_token"
-            self.discord_error = ""
-            self.logger.info("Сохранённый токен Discord удалён из базы.")
+            if target == self.discord_mode:
+                await self._disconnect_discord_locked()
+                self.discord_status = "no_token"
+                self.discord_error = ""
+            if target == "bot":
+                self.discord_bot_token = ""
+                await self.memory.delete_state("discord_bot_token")
+            else:
+                self.discord_token = ""
+                await self.memory.delete_state("discord_token")
+            self.logger.info("Сохранённый токен Discord (%s) удалён из базы.", target)
             self.notify_state_changed()
 
     def request_shutdown(self) -> None:
@@ -6772,10 +7768,22 @@ class BotManager:
                     # Автомиграция открытого токена в DPAPI на Windows
                     if self.secret_box.dpapi_available and not raw_tok.startswith(SecretBox.PREFIX):
                         await self.memory.set_state("discord_token", self.secret_box.protect(dec))
+        if not self.discord_bot_token:
+            raw_btok = await self.memory.get_state("discord_bot_token", "")
+            if isinstance(raw_btok, str) and raw_btok.strip():
+                dec_b = self.secret_box.unprotect(raw_btok)
+                if dec_b:
+                    self.discord_bot_token = dec_b
+                    if self.secret_box.dpapi_available and not raw_btok.startswith(SecretBox.PREFIX):
+                        await self.memory.set_state("discord_bot_token", self.secret_box.protect(dec_b))
+        saved_mode = await self.memory.get_state("discord_mode", None)
+        if saved_mode in {"bot", "selfbot"}:
+            self.discord_mode = saved_mode
+            self.config.discord_mode = saved_mode
 
         saved = await self.memory.get_state("runtime_settings", None)
         if isinstance(saved, dict):
-            for k in ("llm_endpoint", "llm_model", "llm_api_key", "giphy_api_key"):
+            for k in ("llm_endpoint", "llm_model", "llm_api_key", "giphy_api_key", "bot_status", "bot_activity_type", "bot_activity_text"):
                 if isinstance(saved.get(k), str):
                     val = saved[k].strip()
                     if k in {"llm_api_key", "giphy_api_key"} and val.startswith(SecretBox.PREFIX):
@@ -6785,7 +7793,7 @@ class BotManager:
                             val = validate_http_url(val)
                         except ValueError:
                             continue
-                    if val or k in {"llm_api_key", "giphy_api_key"}:
+                    if val or k in {"llm_api_key", "giphy_api_key", "bot_activity_text"}:
                         setattr(self.config, k, val)
             for k in (
                 "auto_select_model",
@@ -6938,6 +7946,9 @@ class BotManager:
                 "cooldown_max": c.cooldown_max,
                 "channel_cooldown_min": c.channel_cooldown_min,
                 "channel_cooldown_max": c.channel_cooldown_max,
+                "bot_status": c.bot_status,
+                "bot_activity_type": c.bot_activity_type,
+                "bot_activity_text": c.bot_activity_text,
             },
         )
         self.notify_state_changed()
@@ -7143,7 +8154,7 @@ class BotManager:
         ch = self.bot.get_channel(channel_id)
         if ch is None:
             return {"id": str(channel_id), "name": f"ID {channel_id}", "guild": "ЛС / Неизвестно"}
-        if isinstance(ch, discord.DMChannel):
+        if _is_dm_channel(ch):
             recip = getattr(ch, "recipient", None)
             rname = getattr(recip, "display_name", getattr(recip, "name", str(channel_id))) if recip else str(channel_id)
             return {"id": str(channel_id), "name": f"ЛС: {rname}", "guild": "Личные сообщения"}
@@ -7321,7 +8332,7 @@ class BotManager:
                 meme_file = matched[1]
 
         if self.config.gifs_enabled and explicit_gif and (not meme_file) and (not gif_query):
-            gif_query = _normalize_gif_query_for_giphy(prompt_text) if not is_dm else "shrek funny"
+            gif_query = _normalize_gif_query_for_giphy(prompt_text) if not is_dm else "funny reaction"
         gif_url = None
         gif_source = ""
         if self.config.gifs_enabled and (not meme_file) and gif_query:
@@ -7499,6 +8510,8 @@ class WebControlPanel:
         r.add_get("/api/channels/available", self.handle_available_channels)
         r.add_get("/api/guilds/available", self.handle_available_guilds)
         r.add_post("/api/discord/connect", self.handle_discord_connect)
+        r.add_post("/api/discord/mode", self.handle_discord_mode)
+        r.add_post("/api/discord/presence", self.handle_discord_presence)
         r.add_post("/api/discord/disconnect", self.handle_discord_disconnect)
         r.add_post("/api/discord/forget", self.handle_discord_forget)
         r.add_post("/api/control", self.handle_control)
@@ -7669,11 +8682,42 @@ class WebControlPanel:
         data = await self._read_json_dict(request)
         raw_token = str(data.get("token", "")).strip()
         save_token = bool(data.get("save", True))
-        token_to_use = raw_token or self.manager.discord_token
+        req_mode = data.get("mode")
+        target_mode = (
+            ("bot" if str(req_mode).strip().lower() == "bot" else "selfbot")
+            if req_mode in {"bot", "selfbot"}
+            else self.manager.discord_mode
+        )
+        saved_tok = (
+            self.manager.discord_bot_token
+            if target_mode == "bot"
+            else self.manager.discord_token
+        )
+        token_to_use = raw_token or saved_tok
         ok, msg = await self.manager.connect_discord(
-            token_to_use, save_token=bool(raw_token and save_token)
+            token_to_use,
+            save_token=bool(raw_token and save_token),
+            mode=target_mode,
         )
         return web.json_response({"ok": ok, "message": msg}, status=200 if ok else 400)
+
+    async def handle_discord_mode(self, request: web.Request) -> web.Response:
+        data = await self._read_json_dict(request)
+        mode = str(data.get("mode", "")).strip().lower()
+        if mode not in {"bot", "selfbot"}:
+            return web.json_response({"ok": False, "error": "Режим должен быть bot или selfbot"}, status=400)
+        auto_conn = bool(data.get("auto_connect", True))
+        ok, msg = await self.manager.set_discord_mode(mode, auto_connect=auto_conn)
+        return web.json_response({"ok": ok, "message": msg, "mode": self.manager.discord_mode}, status=200 if ok else 400)
+
+    async def handle_discord_presence(self, request: web.Request) -> web.Response:
+        data = await self._read_json_dict(request)
+        res = await self.manager.update_bot_presence(
+            status=str(data.get("status", self.manager.config.bot_status)),
+            activity_type=str(data.get("activity_type", self.manager.config.bot_activity_type)),
+            activity_text=str(data.get("activity_text", self.manager.config.bot_activity_text)),
+        )
+        return web.json_response(res)
 
     async def handle_discord_disconnect(self, request: web.Request) -> web.Response:
         await self.manager.disconnect_discord()
@@ -9054,6 +10098,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
   <div class="master-card">
     <div class="status-line" style="cursor:pointer" onclick="openTab('settings')" title="Настройки аккаунта Discord">
       <div class="status-left"><span class="dot" id="dot-discord"></span><span id="sb-discord">Discord...</span></div>
+      <span class="badge badge-cyan" id="sb-mode-badge" style="font-size:9.5px;padding:1.5px 6px">SELF</span>
     </div>
     <div class="status-line" style="cursor:pointer" onclick="pingLLM()" title="Проверить LM Studio">
       <div class="status-left"><span class="dot" id="dot-llm"></span><span id="sb-llm">LLM...</span></div>
@@ -9184,10 +10229,16 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
 
   <main>
     <div class="container">
-      <!-- БАННЕР ТОКЕНА -->
+      <!-- БАННЕР ТОКЕНА (SELFBOT / DISCORD BOT) -->
       <div id="token-banner" class="token-banner" style="display:none">
-        <h2 id="banner-title">Подключение аккаунта Discord</h2>
-        <p>Вставь пользовательский токен Discord сюда — редактировать код не нужно. Токен защищается локально в SQLite.</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+          <h2 id="banner-title" style="margin-bottom:0">Подключение аккаунта Discord</h2>
+          <div class="filter-pills" role="group" aria-label="Режим Discord">
+            <button class="filter-pill active" id="banner-mode-selfbot" onclick="switchDiscordMode('selfbot')">Личный аккаунт (Selfbot)</button>
+            <button class="filter-pill" id="banner-mode-bot" onclick="switchDiscordMode('bot')">Discord-бот (Bot Token)</button>
+          </div>
+        </div>
+        <p id="banner-desc">Вставь пользовательский токен Discord сюда — редактировать код не нужно. Токен защищается локально в SQLite.</p>
         <div id="banner-error" class="token-error-msg" style="display:none"></div>
         <div class="row-inline">
           <input type="password" id="banner-token-input" placeholder="Вставь Discord Token..." onkeydown="if(event.key==='Enter') connectFromBanner()" />
@@ -9197,11 +10248,19 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
           </label>
           <button class="btn btn-primary" onclick="connectFromBanner()">Подключить</button>
         </div>
-        <details class="help-details">
+        <details class="help-details" id="help-selfbot">
           <summary>Как быстро достать токен в браузере?</summary>
           <ol>
             <li>Открой <b>discord.com/app</b> → нажми <b>F12</b> → вкладка <b>Network</b> → фильтр <b>XHR</b> → впиши <code>messages</code>.</li>
             <li>Открой любой чат, кликни на запрос <code>messages?limit=...</code> → <b>Headers</b> → <b>Request Headers</b> → скопируй <b>Authorization</b>.</li>
+          </ol>
+        </details>
+        <details class="help-details" id="help-bot" style="display:none">
+          <summary>Как создать и подключить официального ИИ-бота Discord?</summary>
+          <ol>
+            <li>Открой <b>discord.com/developers/applications</b> → <b>New Application</b> → вкладка <b>Bot</b> → скопируй <b>Bot Token</b> (Reset Token).</li>
+            <li>На той же странице <b>Bot</b> включи тумблер <b>MESSAGE CONTENT INTENT</b> (Privileged Gateway Intents), чтобы бот читал текст сообщений на серверах.</li>
+            <li>Вставь токен выше и нажми <b>Подключить</b> — после входа в настройках появится готовая ссылка для приглашения бота на любой сервер!</li>
           </ol>
         </details>
       </div>
@@ -9223,7 +10282,7 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
           <div class="card" style="cursor:pointer" onclick="openTab('personas')">
             <div class="kpi-label">Активные роли</div>
             <div style="margin-top:8px;display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600">
-              <div><span class="badge badge-dm">ЛС</span> <span id="kpi-role-dm">Помощник</span></div>
+              <div><span class="badge badge-dm">ЛС</span> <span id="kpi-role-dm">Личный помощник</span></div>
               <div><span class="badge badge-srv">SRV</span> <span id="kpi-role-srv">Каваи-девочка</span></div>
             </div>
           </div>
@@ -9899,16 +10958,41 @@ WEB_UI_HTML = r"""<!DOCTYPE html>
         <div class="card" style="margin-bottom:14px">
           <div class="card-title">
             <span>Аккаунт Discord и хранилище</span>
-            <span id="acc-status-badge" style="font-size:12px;color:var(--muted)">—</span>
+            <div class="row-inline no-grow" style="gap:10px">
+              <div class="filter-pills" role="group" aria-label="Режим Discord">
+                <button class="filter-pill active" id="set-mode-selfbot" onclick="switchDiscordMode('selfbot')">Selfbot</button>
+                <button class="filter-pill" id="set-mode-bot" onclick="switchDiscordMode('bot')">Discord Bot</button>
+              </div>
+              <span id="acc-status-badge" style="font-size:12px;color:var(--muted)">—</span>
+            </div>
           </div>
           <div class="field">
-            <label><span>Токен Discord</span><span id="lbl-token-mask" style="color:var(--cyan)"></span></label>
+            <label><span id="lbl-token-title">Токен Discord</span><span id="lbl-token-mask" style="color:var(--cyan)"></span></label>
             <div class="row-inline">
               <input type="password" id="set-discord-token" placeholder="Новый токен (или пусто для переподключения)" />
               <button class="btn no-grow" onclick="togglePassVisibility('set-discord-token', this)">Показать</button>
               <button class="btn btn-primary" onclick="connectFromSettings()">Подключить</button>
               <button class="btn" onclick="disconnectDiscord()">Отключить</button>
               <button class="btn btn-danger" onclick="forgetToken()">Забыть</button>
+            </div>
+          </div>
+          <div id="bot-mode-extras" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+            <div class="row-inline" style="margin-bottom:10px">
+              <select id="set-bot-status" style="max-width:140px">
+                <option value="online">Онлайн (Online)</option>
+                <option value="idle">Неактивен (Idle)</option>
+                <option value="dnd">Не беспокоить (DND)</option>
+                <option value="invisible">Невидимый</option>
+              </select>
+              <select id="set-bot-act-type" style="max-width:160px">
+                <option value="listening">Слушает (Listening)</option>
+                <option value="playing">Играет (Playing)</option>
+                <option value="watching">Смотрит (Watching)</option>
+                <option value="competing">Соревнуется</option>
+              </select>
+              <input type="text" id="set-bot-act-text" placeholder="Статус бота (например: AI Chat • LM Studio)" maxlength="128" />
+              <button class="btn btn-sm btn-primary no-grow" onclick="saveBotPresence()">Обновить статус</button>
+              <a class="btn btn-sm btn-success no-grow" id="btn-bot-invite" href="#" target="_blank" rel="noopener noreferrer" style="display:none;text-decoration:none">Пригласить бота</a>
             </div>
           </div>
           <div style="font-size:11.5px;color:var(--muted);margin-top:8px;display:flex;gap:16px;flex-wrap:wrap">
@@ -10115,14 +11199,15 @@ const TAB_TITLES_EN = {
 function getTabTitle(name) { return (uiLang === 'en' ? TAB_TITLES_EN : TAB_TITLES_RU)[name] || name; }
 
 const BUILTIN_PRESET_EN = {
-  dm_shrek: { name: 'Assistant (DM)', tag: 'DM' },
+  dm_assistant: { name: 'Personal Assistant (DM)', tag: 'DM' },
   srv_kawaii: { name: 'Kawaii Girl (Server)', tag: 'Server' },
   sarcastic_friend: { name: 'Sarcastic Friend', tag: 'General' },
   business_assistant: { name: 'Business Assistant', tag: 'DM' },
   meme_gamer: { name: 'Meme Gamer', tag: 'Server' },
+  ai_bot_assistant: { name: 'AI Assistant (Discord Bot)', tag: 'Bot AI' },
 };
 
-const UI_STATIC_EN = {"Загрузка...": "Loading...", "Основное": "Core", "Обзор и Логи": "Overview & Logs", "Роли и Тестер": "Roles & Sandbox", "База и медиа": "Data & Media", "Каналы и Память": "Channels & Memory", "ВСЕ": "ALL", "Досье": "Dossiers", "Сохранёнки": "Saved Memes", "Интерактив": "Interactive", "Аналитика": "Analytics", "Граф отношений": "Social Graph", "Мини-игры": "Mini-Games", "Система": "System", "Веб-клиент": "Web Client", "Настройки": "Settings", "Проверить LM Studio": "Check LM Studio", "Остановить бота": "Stop Bot", "Обзор, логи и диагностика": "Overview, Logs & Diagnostics", "Поиск": "Search", "Подключение аккаунта Discord": "Connect Discord Account", "Вставь пользовательский токен Discord сюда — редактировать код не нужно. Токен защищается локально в SQLite.": "Paste your Discord user token here — no code editing required. Stored locally with protection in SQLite.", "Показать": "Show", "Запомнить": "Remember", "Подключить": "Connect", "Как быстро достать токен в браузере?": "How to get your token in the browser?", "Открой": "Open", "→ нажми": "→ press", "→ вкладка": "→ tab", "→ фильтр": "→ filter", "→ впиши": "→ type", "Открой любой чат, кликни на запрос": "Open any chat, click request", "→ скопируй": "→ copy", "Отправлено ответов": "Replies Sent", "ЛС: 0 • SRV: 0 • Мемы: 0 • GIF: 0": "DM: 0 • SRV: 0 • Memes: 0 • GIF: 0", "Потоки нейросети": "LLM Streams", "Очередь: 0 • Vision: 0 • Ошибок: 0": "Queue: 0 • Vision: 0 • Errors: 0", "Активные роли": "Active Roles", "ЛС": "DM", "Помощник": "Assistant", "Каваи-девочка": "Kawaii Girl", "Память и база": "Memory & DB", "Сброс кэша": "Clear Cache", "0 досье": "0 dossiers", "SQLite: 0 сообщ. • Кэш: 0": "SQLite: 0 msgs • Cache: 0", "Модули и поведение": "Modules & Behavior", "20 функций": "20 features", "Общение": "Chatting", "Ответы в ЛС": "DM Replies", "Серии (Bursts)": "Message Bursts", "Анти-клише": "Anti-Cliché", "Игнор ботов": "Ignore Bots", "Игры / Spotify": "Games / Spotify", "Память и события": "Memory & Events", "Долгая память FTS5": "Long Memory FTS5", "Досье юзеров": "User Dossiers", "Автосжатие": "Auto-Compact", "Напоминания": "Reminders", "События / ДР": "Events / BDays", "Защита и LLM": "Safety & LLM", "Автомодель LLM": "Auto-Pick Model", "Ghost-пинги": "Ghost Pings", "Шкала Affinity": "Affinity Scale", "Медиа и игры": "Media & Games", "Зрение (Vision)": "Vision (Images)", "Ссылки GIF": "GIF Links", "Гифки (API)": "GIFs (API)", "Генерация и антиповтор": "Generation & Anti-Repeat", "Шанс случайного врыва на серверах": "Random Server Reply Chance", "Склейка серийных сообщений (Debounce)": "Message Burst Debounce", "2.6с": "2.6s", "Одновременных запросов к LLM": "Concurrent LLM Requests", "Температура (креативность)": "Temperature (Creativity)", "Штраф повторов (Frequency Penalty)": "Frequency Penalty", "Максимум токенов на ответ": "Max Response Tokens", "Живые логи": "Live Logs", "Лента событий (": "Activity Feed (", "Почему промолчал (": "Skip Reasons (", "Все": "All", "Автоскролл: ВКЛ": "Autoscroll: ON", "Копировать": "Copy", "Очистить": "Clear", "Причины каждого пропущенного сообщения": "Reasons for every skipped message", "Карточки ответов и событий в реальном времени": "Real-time reply & event cards", "Пресеты характеров": "Persona Presets", "+ Сохранить как пресет": "+ Save as Preset", "Из роли Сервера": "From Server Role", "Из роли ЛС": "From DM Role", "Сохранить": "Save", "Общая роль ЛС": "Default DM Role", "изменено": "modified", "Сброс": "Reset", "Общая роль Серверов": "Default Server Role", "Индивидуальные роли (Overrides)": "Custom Role Overrides", "Приоритет: Человек > Канал > Сервер > Общая": "Priority: User > Channel > Server > Default", "Человек (User ID)": "User (User ID)", "Канал (Channel ID)": "Channel (Channel ID)", "Сервер (Guild ID)": "Server (Guild ID)", "Сохранить роль": "Save Override", "Песочница (текст, Vision, ссылки GIF, мемы)": "Sandbox (Text, Vision, GIF Links, Memes)", "Роль ЛС": "DM Role", "Роль Сервера": "Server Role", "картинка.png": "image.png", "Убрать": "Remove", "Фото / GIF": "Photo / GIF", "Отправить": "Send", "Арена A/B (сравнение 2 вариантов ответа)": "A/B Arena (Compare 2 Variants)", "Параллельный тест температур, ролей или моделей": "Side-by-side test of temperatures, roles, or models", "Вариант A": "Variant A", "Сервер": "Server", "Ответ A появится здесь...": "Response A will appear here...", "Вариант B": "Variant B", "Ответ B появится здесь...": "Response B will appear here...", "Сравнить A vs B": "Compare A vs B", "Белый список каналов": "Channel Whitelist", "Слушать ВСЕ": "Listen ALL", "+ Добавить": "+ Add", "Нажми «Обновить»...": "Click Refresh...", "Обновить": "Refresh", "Чёрный список и триггер-слова": "Blacklist & Trigger Words", "Чёрный список (User ID через запятую)": "Blacklist (comma-separated User IDs)", "Ключевые слова-триггеры (через запятую)": "Trigger keywords (comma-separated)", "Сохранить фильтры": "Save Filters", "Быстрая очистка памяти": "Quick Memory Clear", "Сжать старую": "Compact Old", "Умные напоминания в чате (": "Smart Chat Reminders (", "+ Таймер": "+ Timer", "Трекер дат и событий — ДР, экзамены (": "Events & Birthdays Tracker (", "Ежегодн.": "Yearly", "Поиск по всей долгой памяти": "Search Long-Term Memory", "Мгновенный поиск по архиву переписки в SQLite": "Instant full-text search across SQLite chat archive", "Найти": "Search", "Редактор истории диалогов": "Conversation Memory Editor", "Обновить список": "Refresh List", "Выбери диалог слева": "Select a thread on the left", "Очистить ветку": "Clear Thread", "Собранные досье и симпатия": "Collected Dossiers & Affinity", "Редактор досье": "Dossier Editor", "Имя / Ник": "Name / Nickname", "Симпатия (-10 .. +10)": "Affinity (-10 .. +10)", "0 • нейтрально": "0 • neutral", "Настроение": "Mood", "Факты о человеке": "Facts About User", "Сохранить досье": "Save Dossier", "Папка сохранёнок (": "Saved Memes Folder (", "Пересканировать": "Rescan", "Перетащи картинки или гифки сюда (или кликни для выбора)": "Drag & drop images or GIFs here (or click to browse)", "PNG, JPG, WEBP, GIF, MP4, WEBM (до 8 МБ) • Тег модели:": "PNG, JPG, WEBP, GIF, MP4, WEBM (up to 8 MB) • Model tag:", "[MEME: имя]": "[MEME: name]", "Аналитика диалогов": "Dialog Analytics", "Серверы": "Servers", "Все чаты": "All Chats", "Скачать PNG": "Download PNG", "Лидерборд по сообщениям": "Message Leaderboard", "Объём текста (символы)": "Text Volume (Characters)", "Активность по времени (10-мин слоты)": "Activity Over Time (10-min slots)", "Средняя длина: Участник vs Бот": "Avg Length: User vs Bot", "Интерактивный граф отношений и связей": "Interactive Relationship & Social Graph", "Перетаскивай узлы мышкой • Клик = карточка участника": "Drag nodes with mouse • Click = user details", "Выбранный участник": "Selected User", "Кликни на любой узел на графе слева, чтобы увидеть симпатию, настроение и факты.": "Click any node on the graph to view affinity, mood, and dossier facts.", "Динамика симпатии (7 дней)": "Affinity Trend (7 Days)", "Запустить мини-игру в канале Discord": "Start Mini-Game in Discord Channel", "Игра": "Game", "Слова (цепочка на последнюю букву + автосчёт)": "Word Chain (last letter chain + auto-scoring)", "Угадай персонажа / игру (вопросы да/нет)": "20 Questions (guess character / game)", "Данетки (детективная загадка)": "Yes/No Riddles (detective puzzle)", "Правда или действие": "Truth or Dare", "Канал Discord": "Discord Channel", "Выбрать из каналов...": "Pick a channel...", "Своё стартовое слово / загадка (необязательно)": "Custom starter word / riddle (optional)", "Запустить игру в чат": "Launch Game in Chat", "Активные игры": "Active Games", "Таблица лидеров мини-игр (SQLite)": "Mini-Games Leaderboard (SQLite)", "Сбросить счёт": "Reset Scores", "Язык интерфейса": "Interface Language", "Спрашивать язык при запуске": "Ask language on startup", "Показывать окно выбора языка при каждом открытии файла": "Show the language picker each time the file is launched", "Темы оформления": "Appearance Themes", "Сбросить": "Reset", "Сохранить тему": "Save Theme", "Брендинг и палитра": "Branding & Palette", "Название сайта": "Site Title", "Логотип (1–4 симв.)": "Logo (1–4 chars)", "Подпись внизу сайта": "Footer Text", "Акцент 1": "Accent 1", "Акцент 2": "Accent 2", "Фон": "Background", "Меню": "Sidebar", "Карточки": "Cards", "Текст": "Text", "Геометрия и Custom CSS": "Geometry & Custom CSS", "Ширина меню": "Sidebar Width", "Скругление карточек": "Card Radius", "Масштаб шрифта": "Font Scale", "Компактный режим": "Compact Mode", "Меньше отступов": "Tighter spacing", "Фоновое свечение": "Ambient Glow", "Мягкие градиенты сверху": "Soft top gradients", "Свой CSS-код": "Custom CSS", "Аккаунт Discord и хранилище": "Discord Account & Storage", "Токен Discord": "Discord Token", "Отключить": "Disconnect", "Забыть": "Forget", "Защита:": "Protection:", "Папка:": "Folder:", "Локальная LLM, Vision и Долгая память": "Local LLM, Vision & Long Memory", "Модель (LM Studio)": "Model (LM Studio)", "Найденные...": "Detected...", "API Key (пусто = текущий)": "API Key (empty = keep current)", "Макс. фото": "Max Images", "Досье каждые N": "Dossier Every N", "FTS5 записей": "FTS5 Results", "Fallback из reasoning_content": "Fallback to reasoning_content", "Лучше держать выключенным": "Recommended to keep off", "GPU Guard, Giphy и тайминги": "GPU Guard, Giphy & Timings", "Рейд канала/60с": "Channel Raid/60s", "Флуд юзера/60с": "User Flood/60s", "Обрезка симв.": "Trim Chars", "Удалить": "Delete", "Шанс прикрепить GIF": "GIF Attach Chance", "Чтение мин / макс (с)": "Read Delay Min / Max (s)", "Окно Ghost-пинга (с)": "Ghost Ping Window (s)", "Кулдаун юзера (с)": "User Cooldown (s)", "Кулдаун канала (с)": "Channel Cooldown (s)", "Сохранить и проверить LLM": "Save & Test LLM", "Экспорт JSON": "Export JSON", "Импорт JSON": "Import JSON", "Остановить программу": "Shut Down App", "Есть несохранённые изменения": "You have unsaved changes", "Отменить": "Discard", "выбор": "navigate", "выполнить": "run", "Подтвердите действие": "Confirm Action", "Вы уверены?": "Are you sure?", "Отмена": "Cancel", "Подтвердить": "Confirm", "Настройки аккаунта Discord": "Discord account settings", "Командная палитра (Ctrl+K)": "Command Palette (Ctrl+K)", "Монитор железа (клик = обновить)": "Hardware Monitor (click to refresh)", "Анти-флуд и анти-рейд защита GPU Guard": "GPU Guard anti-flood & anti-raid shield", "Поток событий в реальном времени (SSE)": "Live Server-Sent Events stream (SSE)", "Вставь Discord Token...": "Paste Discord Token...", "Отвечать в личных сообщениях 1-на-1": "Reply in 1-on-1 direct messages", "Разбивать длинные ответы на 2-3 живых сообщения": "Split longer replies into 2-3 natural messages", "Перегенерация шаблонных фраз и повторов": "Silently rewrite robotic clichés & repeats", "Не отвечать на сообщения других ботов": "Ignore messages from other bots", "Чтение текущей игры, стрима и Spotify собеседника": "Read user's current game, stream & Spotify status", "Полнотекстовый поиск по архиву переписки (SQLite FTS5)": "Full-text search across past conversations (SQLite FTS5)", "Автоматический сбор заметок о собеседниках": "Automatically collect notes about users", "Автоматическое сжатие старых диалогов в выжимки": "Automatically compact old dialog batches into summaries", "Таймеры напоминаний прямо из чата": "Reminder timers parsed directly from chat", "Автозапоминание ДР, экзаменов и личных дат": "Auto-remember birthdays, exams & personal dates", "Анти-рейд щит канала и обрезка длинных спам-простыней": "Channel anti-raid shield and long spam text trimmer", "Блокировка взлома промпта и навязанных префиксов": "Block prompt injections and forced message prefixes", "Автовыбор активной модели из LM Studio": "Auto-select loaded chat model from LM Studio", "Реакция на удалённые пинги (Ghost-пинги)": "React when someone deletes a ping/reply (Ghost Ping)", "Динамическая шкала симпатии (-10..+10) и настроения": "Dynamic user affinity (-10..+10) and mood tracking", "Распознавание прикреплённых картинок и кадров GIF": "Analyze attached images and animated GIF frames", "Просмотр превью ссылок Tenor / Klipy / Giphy": "Analyze preview images from Tenor / Klipy / Giphy links", "Отправка гифок через Giphy / Nekos.best": "Send reaction GIFs via Giphy / Nekos.best", "Отправка локальных файлов из папки memes/": "Send local reaction files from memes/ folder", "Интерактивные мини-игры прямо в каналах Discord": "Run interactive mini-games in Discord channels", "Фильтр...": "Filter...", "Название пресета...": "Preset name...", "Тег (ЛС / Сервер)": "Tag (DM / Server)", "Числовой ID...": "Numeric ID...", "Подпись...": "Label...", "Уникальный системный промпт...": "Custom system prompt...", "Собеседник": "User", "Напиши фразу, вставь ссылку GIF или перетащи картинку...": "Type a message, paste a GIF link, or drop an image...", "Температура A": "Temperature A", "Модель (пусто=текущая)": "Model (empty = current)", "Температура B": "Temperature B", "Тестовая фраза для сравнения A vs B...": "Test prompt to compare A vs B...", "ID канала...": "Channel ID...", "Поиск...": "Search...", "бот, кс, го играть": "bot, cs, let's play", "ID канала (пусто = ВСЮ память)": "Channel ID (empty = ALL memory)", "Через сколько минут": "Minutes from now", "Текст напоминания (через N мин)...": "Reminder text (in N min)...", "Имя...": "Name...", "ДД.ММ": "DD.MM", "Событие (День рождения, экзамен...)": "Event (Birthday, exam...)", "Введи слово или фразу из прошлых разговоров...": "Enter a word or phrase from past chats...", "Поиск ветки по нику или каналу...": "Search thread by user or channel...", "Поиск по имени, ID или фактам...": "Search by name, ID, or facts...", "Ник собеседника": "User nickname", "довольна / обижена": "happy / annoyed", "- любит Dota 2\n- часто сидит ночью": "- plays Dota 2\n- often online at night", "Пусто = бот выберет автоматически...": "Empty = bot picks automatically...", "/* Например: .card { backdrop-filter: blur(8px); } */": "/* Example: .card { backdrop-filter: blur(8px); } */", "Новый токен (или пусто для переподключения)": "New token (or empty to reconnect)", "Новый ключ...": "New key...", "Командная палитра": "Command Palette", "Перейти на вкладку или выполнить команду...": "Jump to a tab or run a command..."};
+const UI_STATIC_EN = {"Загрузка...": "Loading...", "Основное": "Core", "Обзор и Логи": "Overview & Logs", "Роли и Тестер": "Roles & Sandbox", "База и медиа": "Data & Media", "Каналы и Память": "Channels & Memory", "ВСЕ": "ALL", "Досье": "Dossiers", "Сохранёнки": "Saved Memes", "Интерактив": "Interactive", "Аналитика": "Analytics", "Граф отношений": "Social Graph", "Мини-игры": "Mini-Games", "Система": "System", "Веб-клиент": "Web Client", "Настройки": "Settings", "Проверить LM Studio": "Check LM Studio", "Остановить бота": "Stop Bot", "Обзор, логи и диагностика": "Overview, Logs & Diagnostics", "Поиск": "Search", "Подключение аккаунта Discord": "Connect Discord Account", "Вставь пользовательский токен Discord сюда — редактировать код не нужно. Токен защищается локально в SQLite.": "Paste your Discord user token here — no code editing required. Stored locally with protection in SQLite.", "Показать": "Show", "Запомнить": "Remember", "Подключить": "Connect", "Как быстро достать токен в браузере?": "How to get your token in the browser?", "Открой": "Open", "→ нажми": "→ press", "→ вкладка": "→ tab", "→ фильтр": "→ filter", "→ впиши": "→ type", "Открой любой чат, кликни на запрос": "Open any chat, click request", "→ скопируй": "→ copy", "Отправлено ответов": "Replies Sent", "ЛС: 0 • SRV: 0 • Мемы: 0 • GIF: 0": "DM: 0 • SRV: 0 • Memes: 0 • GIF: 0", "Потоки нейросети": "LLM Streams", "Очередь: 0 • Vision: 0 • Ошибок: 0": "Queue: 0 • Vision: 0 • Errors: 0", "Активные роли": "Active Roles", "ЛС": "DM", "Личный помощник": "Personal Assistant", "Каваи-девочка": "Kawaii Girl", "Память и база": "Memory & DB", "Сброс кэша": "Clear Cache", "0 досье": "0 dossiers", "SQLite: 0 сообщ. • Кэш: 0": "SQLite: 0 msgs • Cache: 0", "Модули и поведение": "Modules & Behavior", "20 функций": "20 features", "Общение": "Chatting", "Ответы в ЛС": "DM Replies", "Серии (Bursts)": "Message Bursts", "Анти-клише": "Anti-Cliché", "Игнор ботов": "Ignore Bots", "Игры / Spotify": "Games / Spotify", "Память и события": "Memory & Events", "Долгая память FTS5": "Long Memory FTS5", "Досье юзеров": "User Dossiers", "Автосжатие": "Auto-Compact", "Напоминания": "Reminders", "События / ДР": "Events / BDays", "Защита и LLM": "Safety & LLM", "Автомодель LLM": "Auto-Pick Model", "Ghost-пинги": "Ghost Pings", "Шкала Affinity": "Affinity Scale", "Медиа и игры": "Media & Games", "Зрение (Vision)": "Vision (Images)", "Ссылки GIF": "GIF Links", "Гифки (API)": "GIFs (API)", "Генерация и антиповтор": "Generation & Anti-Repeat", "Шанс случайного врыва на серверах": "Random Server Reply Chance", "Склейка серийных сообщений (Debounce)": "Message Burst Debounce", "2.6с": "2.6s", "Одновременных запросов к LLM": "Concurrent LLM Requests", "Температура (креативность)": "Temperature (Creativity)", "Штраф повторов (Frequency Penalty)": "Frequency Penalty", "Максимум токенов на ответ": "Max Response Tokens", "Живые логи": "Live Logs", "Лента событий (": "Activity Feed (", "Почему промолчал (": "Skip Reasons (", "Все": "All", "Автоскролл: ВКЛ": "Autoscroll: ON", "Копировать": "Copy", "Очистить": "Clear", "Причины каждого пропущенного сообщения": "Reasons for every skipped message", "Карточки ответов и событий в реальном времени": "Real-time reply & event cards", "Пресеты характеров": "Persona Presets", "+ Сохранить как пресет": "+ Save as Preset", "Из роли Сервера": "From Server Role", "Из роли ЛС": "From DM Role", "Сохранить": "Save", "Общая роль ЛС": "Default DM Role", "изменено": "modified", "Сброс": "Reset", "Общая роль Серверов": "Default Server Role", "Индивидуальные роли (Overrides)": "Custom Role Overrides", "Приоритет: Человек > Канал > Сервер > Общая": "Priority: User > Channel > Server > Default", "Человек (User ID)": "User (User ID)", "Канал (Channel ID)": "Channel (Channel ID)", "Сервер (Guild ID)": "Server (Guild ID)", "Сохранить роль": "Save Override", "Песочница (текст, Vision, ссылки GIF, мемы)": "Sandbox (Text, Vision, GIF Links, Memes)", "Роль ЛС": "DM Role", "Роль Сервера": "Server Role", "картинка.png": "image.png", "Убрать": "Remove", "Фото / GIF": "Photo / GIF", "Отправить": "Send", "Арена A/B (сравнение 2 вариантов ответа)": "A/B Arena (Compare 2 Variants)", "Параллельный тест температур, ролей или моделей": "Side-by-side test of temperatures, roles, or models", "Вариант A": "Variant A", "Сервер": "Server", "Ответ A появится здесь...": "Response A will appear here...", "Вариант B": "Variant B", "Ответ B появится здесь...": "Response B will appear here...", "Сравнить A vs B": "Compare A vs B", "Белый список каналов": "Channel Whitelist", "Слушать ВСЕ": "Listen ALL", "+ Добавить": "+ Add", "Нажми «Обновить»...": "Click Refresh...", "Обновить": "Refresh", "Чёрный список и триггер-слова": "Blacklist & Trigger Words", "Чёрный список (User ID через запятую)": "Blacklist (comma-separated User IDs)", "Ключевые слова-триггеры (через запятую)": "Trigger keywords (comma-separated)", "Сохранить фильтры": "Save Filters", "Быстрая очистка памяти": "Quick Memory Clear", "Сжать старую": "Compact Old", "Умные напоминания в чате (": "Smart Chat Reminders (", "+ Таймер": "+ Timer", "Трекер дат и событий — ДР, экзамены (": "Events & Birthdays Tracker (", "Ежегодн.": "Yearly", "Поиск по всей долгой памяти": "Search Long-Term Memory", "Мгновенный поиск по архиву переписки в SQLite": "Instant full-text search across SQLite chat archive", "Найти": "Search", "Редактор истории диалогов": "Conversation Memory Editor", "Обновить список": "Refresh List", "Выбери диалог слева": "Select a thread on the left", "Очистить ветку": "Clear Thread", "Собранные досье и симпатия": "Collected Dossiers & Affinity", "Редактор досье": "Dossier Editor", "Имя / Ник": "Name / Nickname", "Симпатия (-10 .. +10)": "Affinity (-10 .. +10)", "0 • нейтрально": "0 • neutral", "Настроение": "Mood", "Факты о человеке": "Facts About User", "Сохранить досье": "Save Dossier", "Папка сохранёнок (": "Saved Memes Folder (", "Пересканировать": "Rescan", "Перетащи картинки или гифки сюда (или кликни для выбора)": "Drag & drop images or GIFs here (or click to browse)", "PNG, JPG, WEBP, GIF, MP4, WEBM (до 8 МБ) • Тег модели:": "PNG, JPG, WEBP, GIF, MP4, WEBM (up to 8 MB) • Model tag:", "[MEME: имя]": "[MEME: name]", "Аналитика диалогов": "Dialog Analytics", "Серверы": "Servers", "Все чаты": "All Chats", "Скачать PNG": "Download PNG", "Лидерборд по сообщениям": "Message Leaderboard", "Объём текста (символы)": "Text Volume (Characters)", "Активность по времени (10-мин слоты)": "Activity Over Time (10-min slots)", "Средняя длина: Участник vs Бот": "Avg Length: User vs Bot", "Интерактивный граф отношений и связей": "Interactive Relationship & Social Graph", "Перетаскивай узлы мышкой • Клик = карточка участника": "Drag nodes with mouse • Click = user details", "Выбранный участник": "Selected User", "Кликни на любой узел на графе слева, чтобы увидеть симпатию, настроение и факты.": "Click any node on the graph to view affinity, mood, and dossier facts.", "Динамика симпатии (7 дней)": "Affinity Trend (7 Days)", "Запустить мини-игру в канале Discord": "Start Mini-Game in Discord Channel", "Игра": "Game", "Слова (цепочка на последнюю букву + автосчёт)": "Word Chain (last letter chain + auto-scoring)", "Угадай персонажа / игру (вопросы да/нет)": "20 Questions (guess character / game)", "Данетки (детективная загадка)": "Yes/No Riddles (detective puzzle)", "Правда или действие": "Truth or Dare", "Канал Discord": "Discord Channel", "Выбрать из каналов...": "Pick a channel...", "Своё стартовое слово / загадка (необязательно)": "Custom starter word / riddle (optional)", "Запустить игру в чат": "Launch Game in Chat", "Активные игры": "Active Games", "Таблица лидеров мини-игр (SQLite)": "Mini-Games Leaderboard (SQLite)", "Сбросить счёт": "Reset Scores", "Язык интерфейса": "Interface Language", "Спрашивать язык при запуске": "Ask language on startup", "Показывать окно выбора языка при каждом открытии файла": "Show the language picker each time the file is launched", "Темы оформления": "Appearance Themes", "Сбросить": "Reset", "Сохранить тему": "Save Theme", "Брендинг и палитра": "Branding & Palette", "Название сайта": "Site Title", "Логотип (1–4 симв.)": "Logo (1–4 chars)", "Подпись внизу сайта": "Footer Text", "Акцент 1": "Accent 1", "Акцент 2": "Accent 2", "Фон": "Background", "Меню": "Sidebar", "Карточки": "Cards", "Текст": "Text", "Геометрия и Custom CSS": "Geometry & Custom CSS", "Ширина меню": "Sidebar Width", "Скругление карточек": "Card Radius", "Масштаб шрифта": "Font Scale", "Компактный режим": "Compact Mode", "Меньше отступов": "Tighter spacing", "Фоновое свечение": "Ambient Glow", "Мягкие градиенты сверху": "Soft top gradients", "Свой CSS-код": "Custom CSS", "Аккаунт Discord и хранилище": "Discord Account & Storage", "Токен Discord": "Discord Token", "Отключить": "Disconnect", "Забыть": "Forget", "Защита:": "Protection:", "Папка:": "Folder:", "Локальная LLM, Vision и Долгая память": "Local LLM, Vision & Long Memory", "Модель (LM Studio)": "Model (LM Studio)", "Найденные...": "Detected...", "API Key (пусто = текущий)": "API Key (empty = keep current)", "Макс. фото": "Max Images", "Досье каждые N": "Dossier Every N", "FTS5 записей": "FTS5 Results", "Fallback из reasoning_content": "Fallback to reasoning_content", "Лучше держать выключенным": "Recommended to keep off", "GPU Guard, Giphy и тайминги": "GPU Guard, Giphy & Timings", "Рейд канала/60с": "Channel Raid/60s", "Флуд юзера/60с": "User Flood/60s", "Обрезка симв.": "Trim Chars", "Удалить": "Delete", "Шанс прикрепить GIF": "GIF Attach Chance", "Чтение мин / макс (с)": "Read Delay Min / Max (s)", "Окно Ghost-пинга (с)": "Ghost Ping Window (s)", "Кулдаун юзера (с)": "User Cooldown (s)", "Кулдаун канала (с)": "Channel Cooldown (s)", "Сохранить и проверить LLM": "Save & Test LLM", "Экспорт JSON": "Export JSON", "Импорт JSON": "Import JSON", "Остановить программу": "Shut Down App", "Есть несохранённые изменения": "You have unsaved changes", "Отменить": "Discard", "выбор": "navigate", "выполнить": "run", "Подтвердите действие": "Confirm Action", "Вы уверены?": "Are you sure?", "Отмена": "Cancel", "Подтвердить": "Confirm", "Настройки аккаунта Discord": "Discord account settings", "Командная палитра (Ctrl+K)": "Command Palette (Ctrl+K)", "Монитор железа (клик = обновить)": "Hardware Monitor (click to refresh)", "Анти-флуд и анти-рейд защита GPU Guard": "GPU Guard anti-flood & anti-raid shield", "Поток событий в реальном времени (SSE)": "Live Server-Sent Events stream (SSE)", "Вставь Discord Token...": "Paste Discord Token...", "Отвечать в личных сообщениях 1-на-1": "Reply in 1-on-1 direct messages", "Разбивать длинные ответы на 2-3 живых сообщения": "Split longer replies into 2-3 natural messages", "Перегенерация шаблонных фраз и повторов": "Silently rewrite robotic clichés & repeats", "Не отвечать на сообщения других ботов": "Ignore messages from other bots", "Чтение текущей игры, стрима и Spotify собеседника": "Read user's current game, stream & Spotify status", "Полнотекстовый поиск по архиву переписки (SQLite FTS5)": "Full-text search across past conversations (SQLite FTS5)", "Автоматический сбор заметок о собеседниках": "Automatically collect notes about users", "Автоматическое сжатие старых диалогов в выжимки": "Automatically compact old dialog batches into summaries", "Таймеры напоминаний прямо из чата": "Reminder timers parsed directly from chat", "Автозапоминание ДР, экзаменов и личных дат": "Auto-remember birthdays, exams & personal dates", "Анти-рейд щит канала и обрезка длинных спам-простыней": "Channel anti-raid shield and long spam text trimmer", "Блокировка взлома промпта и навязанных префиксов": "Block prompt injections and forced message prefixes", "Автовыбор активной модели из LM Studio": "Auto-select loaded chat model from LM Studio", "Реакция на удалённые пинги (Ghost-пинги)": "React when someone deletes a ping/reply (Ghost Ping)", "Динамическая шкала симпатии (-10..+10) и настроения": "Dynamic user affinity (-10..+10) and mood tracking", "Распознавание прикреплённых картинок и кадров GIF": "Analyze attached images and animated GIF frames", "Просмотр превью ссылок Tenor / Klipy / Giphy": "Analyze preview images from Tenor / Klipy / Giphy links", "Отправка гифок через Giphy / Nekos.best": "Send reaction GIFs via Giphy / Nekos.best", "Отправка локальных файлов из папки memes/": "Send local reaction files from memes/ folder", "Интерактивные мини-игры прямо в каналах Discord": "Run interactive mini-games in Discord channels", "Фильтр...": "Filter...", "Название пресета...": "Preset name...", "Тег (ЛС / Сервер)": "Tag (DM / Server)", "Числовой ID...": "Numeric ID...", "Подпись...": "Label...", "Уникальный системный промпт...": "Custom system prompt...", "Собеседник": "User", "Напиши фразу, вставь ссылку GIF или перетащи картинку...": "Type a message, paste a GIF link, or drop an image...", "Температура A": "Temperature A", "Модель (пусто=текущая)": "Model (empty = current)", "Температура B": "Temperature B", "Тестовая фраза для сравнения A vs B...": "Test prompt to compare A vs B...", "ID канала...": "Channel ID...", "Поиск...": "Search...", "бот, кс, го играть": "bot, cs, let's play", "ID канала (пусто = ВСЮ память)": "Channel ID (empty = ALL memory)", "Через сколько минут": "Minutes from now", "Текст напоминания (через N мин)...": "Reminder text (in N min)...", "Имя...": "Name...", "ДД.ММ": "DD.MM", "Событие (День рождения, экзамен...)": "Event (Birthday, exam...)", "Введи слово или фразу из прошлых разговоров...": "Enter a word or phrase from past chats...", "Поиск ветки по нику или каналу...": "Search thread by user or channel...", "Поиск по имени, ID или фактам...": "Search by name, ID, or facts...", "Ник собеседника": "User nickname", "довольна / обижена": "happy / annoyed", "- любит Dota 2\n- часто сидит ночью": "- plays Dota 2\n- often online at night", "Пусто = бот выберет автоматически...": "Empty = bot picks automatically...", "/* Например: .card { backdrop-filter: blur(8px); } */": "/* Example: .card { backdrop-filter: blur(8px); } */", "Новый токен (или пусто для переподключения)": "New token (or empty to reconnect)", "Новый ключ...": "New key...", "Командная палитра": "Command Palette", "Перейти на вкладку или выполнить команду...": "Jump to a tab or run a command...", "Режим Discord": "Discord Mode", "Личный аккаунт (Selfbot)": "User Account (Selfbot)", "Discord-бот (Bot Token)": "Discord Bot (Bot Token)", "Как создать и подключить официального ИИ-бота Discord?": "How to create & connect an official Discord AI Bot?", "На той же странице": "On the same", "включи тумблер": "page, enable", "(Privileged Gateway Intents), чтобы бот читал текст сообщений на серверах.": "(Privileged Gateway Intents) so the bot can read server messages.", "Вставь токен выше и нажми": "Paste the token above and click", "— после входа в настройках появится готовая ссылка для приглашения бота на любой сервер!": "— once online, a 1-click Invite Bot link will appear in Settings!", "Онлайн (Online)": "Online", "Неактивен (Idle)": "Idle", "Не беспокоить (DND)": "Do Not Disturb (DND)", "Невидимый": "Invisible", "Слушает (Listening)": "Listening", "Играет (Playing)": "Playing", "Смотрит (Watching)": "Watching", "Соревнуется": "Competing", "Статус бота (например: AI Chat • LM Studio)": "Bot status text (e.g. AI Chat • LM Studio)", "Обновить статус": "Update Status", "Пригласить бота": "Invite Bot"};
 
 const _i18nDynamicRoots = new Set([
   'log-box','diag-box','timeline-box','chat-box','dossiers-list','memes-grid',
@@ -10135,7 +11220,7 @@ const _i18nDynamicLeafIds = new Set([
   'kpi-streams-sub','kpi-role-dm','kpi-role-srv','kpi-dossiers','kpi-mem','lbl-debounce',
   'btn-autoscroll','acc-status-badge','lbl-token-mask','lbl-llmkey-mask','lbl-giphy-mask',
   'lbl-pillow','lbl-fts5','lbl-dos-aff','dirty-bar-text','confirm-title','confirm-msg',
-  'confirm-ok','ui-brand-title','ui-brand-logo','ui-footer-left','ui-footer-text','lbl-guard','lbl-sse'
+  'confirm-ok','ui-brand-title','ui-brand-logo','ui-footer-left','ui-footer-text','lbl-guard','lbl-sse','sb-mode-badge','banner-desc','lbl-token-title'
 ]);
 let _i18nTextRecords = null;
 let _i18nAttrRecords = null;
@@ -10512,26 +11597,62 @@ function applyState(data) {
   }
 
   const d = data.discord;
+  const isBotMode = d.mode === 'bot';
   const dotD = document.getElementById('dot-discord');
   const sbD = document.getElementById('sb-discord');
+  const sbMode = document.getElementById('sb-mode-badge');
   const banner = document.getElementById('token-banner');
   const bErr = document.getElementById('banner-error');
+
+  if (sbMode) {
+    sbMode.textContent = isBotMode ? 'BOT' : 'SELF';
+    sbMode.className = 'badge ' + (isBotMode ? 'badge-dm' : 'badge-cyan');
+  }
+  document.getElementById('banner-mode-selfbot')?.classList.toggle('active', !isBotMode);
+  document.getElementById('banner-mode-bot')?.classList.toggle('active', isBotMode);
+  document.getElementById('set-mode-selfbot')?.classList.toggle('active', !isBotMode);
+  document.getElementById('set-mode-bot')?.classList.toggle('active', isBotMode);
+  document.getElementById('help-selfbot').style.display = isBotMode ? 'none' : 'block';
+  document.getElementById('help-bot').style.display = isBotMode ? 'block' : 'none';
+  document.getElementById('bot-mode-extras').style.display = isBotMode ? 'block' : 'none';
+
+  document.getElementById('banner-desc').textContent = isBotMode
+    ? L('Режим официального Discord-бота: вставь Bot Token из Discord Developer Portal. Работает через Gateway v10 без конфликта библиотек.', 'Official Discord Bot mode: paste your Bot Token from the Discord Developer Portal. Runs natively on Gateway v10.')
+    : L('Режим личного аккаунта (Selfbot): вставь пользовательский токен Discord сюда. Токен защищается локально в SQLite.', 'Personal account mode (Selfbot): paste your Discord user token here. Stored locally with protection in SQLite.');
+  document.getElementById('lbl-token-title').textContent = isBotMode
+    ? L('Токен Discord-бота (Bot Token)', 'Discord Bot Token')
+    : L('Токен аккаунта Discord (Selfbot)', 'Discord User Token (Selfbot)');
+  const bInp = document.getElementById('banner-token-input');
+  if (bInp) bInp.placeholder = isBotMode ? L('Вставь Discord Bot Token...', 'Paste Discord Bot Token...') : L('Вставь Discord Token...', 'Paste Discord Token...');
+
+  if (isBotMode) {
+    syncField('set-bot-status', d.bot_status || 'online');
+    syncField('set-bot-act-type', d.bot_activity_type || 'listening');
+    syncField('set-bot-act-text', d.bot_activity_text || '');
+    const invBtn = document.getElementById('btn-bot-invite');
+    if (invBtn) {
+      if (d.invite_url) { invBtn.href = d.invite_url; invBtn.style.display = 'inline-flex'; }
+      else invBtn.style.display = 'none';
+    }
+  }
 
   if (d.online) {
     dotD.className = 'dot on'; sbD.textContent = `${d.username} (${d.guilds_count})`;
     banner.style.display = 'none';
-    document.getElementById('acc-status-badge').textContent = L(`Онлайн: ${d.username} (${d.user_id})`, `Online: ${d.username} (${d.user_id})`);
+    document.getElementById('acc-status-badge').textContent = L(`Онлайн [${isBotMode ? 'Bot' : 'Selfbot'}]: ${d.username} (${d.user_id})`, `Online [${isBotMode ? 'Bot' : 'Selfbot'}]: ${d.username} (${d.user_id})`);
     if (d.user_id && d.user_id !== lastDiscordUid) { lastDiscordUid = d.user_id; loadAvailableChannels(); }
   } else if (d.status === 'connecting') {
     dotD.className = 'dot warn'; sbD.textContent = L('Подключение...', 'Connecting...');
     banner.style.display = 'block'; banner.className = 'token-banner';
-    document.getElementById('banner-title').textContent = L('Подключение к Discord...', 'Connecting to Discord...');
+    document.getElementById('banner-title').textContent = isBotMode ? L('Подключение Discord-бота...', 'Connecting Discord Bot...') : L('Подключение к Discord...', 'Connecting to Discord...');
     bErr.style.display = 'none';
     document.getElementById('acc-status-badge').textContent = L('Подключение...', 'Connecting...');
   } else {
     dotD.className = 'dot off'; sbD.textContent = d.status === 'error' ? L('Ошибка входа', 'Login Error') : L('Не подключён', 'Disconnected');
     banner.style.display = 'block'; banner.className = 'token-banner' + (d.status === 'error' ? ' error' : '');
-    document.getElementById('banner-title').textContent = d.status === 'error' ? L('Ошибка входа — нужен свежий токен', 'Login Error — fresh token required') : L('Подключи аккаунт Discord', 'Connect Discord Account');
+    document.getElementById('banner-title').textContent = d.status === 'error'
+      ? L('Ошибка входа — проверь токен и Intents', 'Login Error — check token & Intents')
+      : (isBotMode ? L('Подключение Discord-бота (AI Bot)', 'Connect Official Discord AI Bot') : L('Подключи аккаунт Discord', 'Connect Discord Account'));
     if (d.error) { bErr.style.display = 'block'; bErr.textContent = d.error; } else bErr.style.display = 'none';
     document.getElementById('acc-status-badge').textContent = d.error || L('Отключён', 'Disconnected');
   }
@@ -10579,7 +11700,7 @@ function applyState(data) {
   const pct = Math.min(100, Math.round((data.llm.active_requests / Math.max(1, data.llm.max_concurrency)) * 100));
   document.getElementById('bar-streams').style.width = pct + '%';
 
-  document.getElementById('kpi-role-dm').textContent = data.personas.dm_is_default ? L('Помощник ', ' Assistant') : L('Кастомная роль', 'Custom Role');
+  document.getElementById('kpi-role-dm').textContent = data.personas.dm_is_default ? L('Личный помощник', 'Personal Assistant') : L('Кастомная роль', 'Custom Role');
   document.getElementById('kpi-role-srv').textContent = data.personas.srv_is_default ? L('Каваи-девочка', 'Kawaii Girl') : L('Кастомная роль', 'Custom Role');
   document.getElementById('kpi-dossiers').textContent = L(`${data.stats.dossiers_count} досье`, `${data.stats.dossiers_count} dossiers`);
   document.getElementById('kpi-mem').textContent =
@@ -10849,16 +11970,37 @@ async function clearDiagnostics() { await api('/api/diagnostics/clear', { method
 // ============================================================================
 // DISCORD / LLM / РОЛИ / ПРЕСЕТЫ / OVERRIDES
 // ============================================================================
+async function switchDiscordMode(mode) {
+  const res = await api('/api/discord/mode', { method: 'POST', body: JSON.stringify({ mode, auto_connect: true }) });
+  if (res.ok) toast(mode === 'bot' ? L('Режим: Discord-бот (Bot Token)', 'Mode: Official Discord Bot') : L('Режим: Личный аккаунт (Selfbot)', 'Mode: User Account (Selfbot)'));
+  else toast(res.message || res.error || L('Ошибка переключения', 'Switch failed'), true);
+}
+
+async function saveBotPresence() {
+  const res = await api('/api/discord/presence', {
+    method: 'POST',
+    body: JSON.stringify({
+      status: document.getElementById('set-bot-status').value,
+      activity_type: document.getElementById('set-bot-act-type').value,
+      activity_text: document.getElementById('set-bot-act-text').value.trim(),
+    }),
+  });
+  if (res.ok) toast(res.applied_live ? L('Статус бота обновлён в Discord!', 'Bot presence updated live!') : L('Статус бота сохранён', 'Bot presence saved'));
+  else toast(res.error || L('Ошибка', 'Error'), true);
+}
+
 async function connectFromBanner() {
   const inp = document.getElementById('banner-token-input');
   const save = document.getElementById('banner-save-chk').checked;
-  const res = await api('/api/discord/connect', { method: 'POST', body: JSON.stringify({ token: inp.value.trim(), save }) });
+  const mode = state?.discord?.mode || 'selfbot';
+  const res = await api('/api/discord/connect', { method: 'POST', body: JSON.stringify({ token: inp.value.trim(), save, mode }) });
   if (res.ok) { inp.value = ''; toast(L('Подключаюсь к Discord...', 'Connecting to Discord...')); } else toast(res.message || res.error || L('Ошибка токена', 'Invalid token'), true);
 }
 
 async function connectFromSettings() {
   const inp = document.getElementById('set-discord-token');
-  const res = await api('/api/discord/connect', { method: 'POST', body: JSON.stringify({ token: inp.value.trim(), save: true }) });
+  const mode = state?.discord?.mode || 'selfbot';
+  const res = await api('/api/discord/connect', { method: 'POST', body: JSON.stringify({ token: inp.value.trim(), save: true, mode }) });
   if (res.ok) { inp.value = ''; toast(L('Подключаюсь к Discord...', 'Connecting to Discord...')); } else toast(res.message || res.error || L('Вставь токен', 'Paste token'), true);
 }
 
@@ -12233,6 +13375,7 @@ function getCmdKItems() {
   const actIco = '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>';
   return [
     { group: gAct, title: activeTxt, sub: L('Мгновенное переключение мастера активности', 'Toggle bot auto-responder on or off'), kw: 'старт пауза вкл выкл toggle start pause bot', ico: actIco, run: () => toggleMaster() },
+    { group: gAct, title: state?.discord?.mode === 'bot' ? L('Переключить режим: Selfbot', 'Switch Mode: Selfbot') : L('Переключить режим: Discord Bot', 'Switch Mode: Discord Bot'), sub: L('Мгновенное переключение между личным аккаунтом и официальным ботом', 'Switch between Personal Account (Selfbot) and Official Discord Bot'), kw: 'bot selfbot mode режим токен token discord', ico: actIco, run: () => switchDiscordMode(state?.discord?.mode === 'bot' ? 'selfbot' : 'bot') },
     { group: gAct, title: L('Выбрать язык (RU / EN)', 'Choose Language (RU / EN)'), sub: L('Открыть окно выбора языка с флагами', 'Open language picker dialog with flags'), kw: 'язык language english russian ru en locale i18n flag флаг', ico: actIco, run: () => openLangModal() },
     { group: gAct, title: L('Проверить LM Studio', 'Check LM Studio'), sub: L('Пинг локальной LLM и обновление списка моделей', 'Ping local LLM server and refresh model list'), kw: 'ping llm lm studio тест модель check', ico: actIco, run: () => pingLLM() },
     { group: gAct, title: L('Сбросить кэш ответов', 'Clear Reply Cache'), sub: L('Очистить TTL-кэш быстрых реплик в RAM', 'Clear in-memory TTL response cache'), kw: 'cache clear сброс кэш', ico: actIco, run: () => clearCache() },
@@ -12368,7 +13511,6 @@ connectSSE();
 # ==============================================================================
 async def _async_main() -> None:
     config = BotConfig()
-    detach_python_console(config.hide_console)
     logger, log_buffer = setup_logging(config.log_level, config.log_file)
     manager = BotManager(config=config, logger=logger, log_buffer=log_buffer)
 

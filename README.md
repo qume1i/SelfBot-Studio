@@ -1,5 +1,5 @@
 # SelfBot-Studio
-Turn your Discord account into a local AI bot powered by **LM Studio** — with a built-in **Web UI**, all in a single `.py` file.
+Turn your Discord account into a local AI bot powered by **LM Studio** — with a built-in **Web UI**, all in a single `.py` file. Full freedom
 
 
 i would recommend to download these models (bcs its better):

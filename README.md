@@ -11,8 +11,9 @@ https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/blob/main/gemma-4-E4B
 
 Quick Start
 1. Load the model in **LM Studio** and start the local server (`http://localhost:1234`)(or smth like this(check in the lm studio)).
-2. run selfbot.py 
-3. paste your discord token, add whitelisted channels, use with peace 
+2. open terminal an type  `pip install -r requirements.txt `
+3. run selfbot.py
+4. paste your discord token, add whitelisted channels, use with peace 
 
 
 
